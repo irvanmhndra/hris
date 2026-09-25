@@ -3,6 +3,7 @@ module github.com/irvanmhndra/hris-api
 go 1.26.6
 
 require (
+	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/labstack/echo/v5 v5.2.0
 	github.com/lib/pq v1.10.9
