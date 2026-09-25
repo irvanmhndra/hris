@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/irvanmhndra/hris-api/config"
+	"github.com/irvanmhndra/hris-api/internal/app"
 	"github.com/irvanmhndra/hris-api/internal/repository/postgres"
-	"github.com/irvanmhndra/hris-api/internal/router"
 	"github.com/irvanmhndra/hris-api/internal/service"
+	"github.com/irvanmhndra/hris-api/migrations"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
@@ -29,12 +30,12 @@ func TestHRISWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	schema := fmt.Sprintf("hris_test_%d", time.Now().UnixNano())
 	if _, err = db.Exec(`CREATE SCHEMA ` + schema); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`)
+	defer func() { _, _ = db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`) }()
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"
@@ -43,25 +44,19 @@ func TestHRISWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer isolated.Close()
-	files, err := filepath.Glob("../../migrations/*.up.sql")
-	if err != nil {
-		t.Fatal(err)
+	defer func() { _ = isolated.Close() }()
+	// Apply migrations through the same golang-migrate runner production uses.
+	if err = migrations.Up(context.Background(), isolated.DB); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
-	for _, file := range files {
-		body, e := os.ReadFile(file)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if _, e = isolated.Exec(string(body)); e != nil {
-			t.Fatalf("%s: %v", file, e)
-		}
+	if err = migrations.Up(context.Background(), isolated.DB); err != nil {
+		t.Fatalf("second migrate run must be a no-op: %v", err)
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("TestPassword123!"), bcrypt.MinCost)
 	_, err = isolated.Exec(`INSERT INTO companies(id,name,slug) VALUES(1,'Alpha','alpha'),(2,'Beta','beta');
  INSERT INTO departments(id,company_id,name) VALUES(1,1,'Engineering'),(2,2,'People');
  INSERT INTO employees(id,company_id,code,name,email,department_id,position,joined_on) VALUES(1,1,'A1','Employee A','staff@alpha.test',1,'Engineer','2025-01-01'),(2,2,'B1','Employee B','staff@beta.test',2,'HR','2025-01-01');
- SELECT setval('employees_id_seq',2);`)
+ SELECT setval('employees_id_seq',2); SELECT setval('departments_id_seq',2); SELECT setval('companies_id_seq',2);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +70,11 @@ func TestHRISWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	isolated.Exec(`SELECT setval('users_id_seq',4)`)
-	repo := &postgres.Repository{DB: isolated}
-	e := router.New(&service.Service{Repo: repo})
+	if _, err = isolated.Exec(`SELECT setval('users_id_seq',4)`); err != nil {
+		t.Fatal(err)
+	}
+	auth := postgres.NewAuthRepository(isolated)
+	e := app.NewServer(isolated, config.Config{})
 	request := func(method, path, token string, body any, want int) map[string]any {
 		t.Helper()
 		b, _ := json.Marshal(body)
@@ -98,7 +95,7 @@ func TestHRISWorkflow(t *testing.T) {
 		return v
 	}
 	session := func(id int64, token string) {
-		if err := repo.CreateSession(context.Background(), id, service.HashToken(token)); err != nil {
+		if err := auth.CreateSession(context.Background(), id, service.HashToken(token)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -124,7 +121,9 @@ func TestHRISWorkflow(t *testing.T) {
 	employee["password"] = ""
 	request("PUT", fmt.Sprintf("/employees/%.0f", created), "admin", employee, 200)
 	var accounts int
-	isolated.Get(&accounts, `SELECT count(*) FROM users WHERE employee_id=$1`, created)
+	if err = isolated.Get(&accounts, `SELECT count(*) FROM users WHERE employee_id=$1`, created); err != nil {
+		t.Fatal(err)
+	}
 	if accounts != 1 {
 		t.Fatal("email change duplicated accounts")
 	}
@@ -283,6 +282,83 @@ func TestHRISWorkflow(t *testing.T) {
 	if len(request("GET", "/audit-logs", "admin", nil, 200)["data"].([]any)) < 15 {
 		t.Fatal("audit trail incomplete")
 	}
+	pagination := func(v map[string]any) map[string]any {
+		t.Helper()
+		meta, ok := v["meta"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing meta: %v", v)
+		}
+		return meta["pagination"].(map[string]any)
+	}
+	auditPage := request("GET", "/audit-logs?page=2&per_page=5", "admin", nil, 200)
+	if p := pagination(auditPage); len(auditPage["data"].([]any)) != 5 || p["current_page"] != float64(2) || p["total_records"].(float64) < 15 {
+		t.Fatalf("audit pagination wrong: %v", p)
+	}
+	request("GET", "/audit-logs?page=-1", "admin", nil, 422)
+
+	// Departments and dashboard are tenant-scoped and admin-only.
+	request("GET", "/departments", "staff", nil, 403)
+	request("POST", "/departments", "admin", map[string]string{"name": "F"}, 422)
+	request("POST", "/departments", "admin", map[string]string{"name": "Finance"}, 200)
+	if len(request("GET", "/departments", "admin", nil, 200)["data"].([]any)) != 2 {
+		t.Fatal("department list wrong")
+	}
+	if len(request("GET", "/departments", "other", nil, 200)["data"].([]any)) != 1 {
+		t.Fatal("department tenant leak")
+	}
+	request("GET", "/dashboard", "staff", nil, 403)
+	dash := request("GET", "/dashboard", "admin", nil, 200)["data"].(map[string]any)
+	if dash["employees"] != float64(2) || dash["departments"] != float64(2) || dash["pending"] != float64(0) {
+		t.Fatalf("dashboard counts wrong: %v", dash)
+	}
+
+	// Server-side employee pagination, search, and filters.
+	empPage := request("GET", "/employees?page=1&per_page=1", "admin", nil, 200)
+	if p := pagination(empPage); len(empPage["data"].([]any)) != 1 || p["total_records"] != float64(2) || p["total_pages"] != float64(2) {
+		t.Fatalf("employee pagination wrong: %v", p)
+	}
+	found := request("GET", "/employees?page=1&search=PERSON", "admin", nil, 200)["data"].([]any)
+	if len(found) != 1 || found[0].(map[string]any)["name"] != "New Person" {
+		t.Fatalf("employee search wrong: %v", found)
+	}
+	if len(request("GET", "/employees?page=1&search=engineering", "admin", nil, 200)["data"].([]any)) != 2 {
+		t.Fatal("employee search by department failed")
+	}
+	if len(request("GET", "/employees?page=1&search=%25", "admin", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("LIKE wildcard not escaped")
+	}
+	if len(request("GET", "/employees?page=1&status=inactive", "admin", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("status filter failed")
+	}
+	if len(request("GET", "/employees?page=1&department_id=2", "admin", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("department filter crossed tenants")
+	}
+	request("GET", "/employees?page=1&status=bogus", "admin", nil, 422)
+	request("GET", "/employees?page=abc", "admin", nil, 422)
+
+	// Every error carries the envelope with a machine-readable code.
+	for _, c := range []struct {
+		method, path, token string
+		status              int
+		code                string
+	}{
+		{"GET", "/employees", "", 401, "UNAUTHORIZED"},
+		{"GET", "/employees", "staff", 403, "FORBIDDEN"},
+		{"GET", "/no-such-route", "admin", 404, "NOT_FOUND"},
+		{"GET", "/employees?page=1&status=bogus", "admin", 422, "VALIDATION_ERROR"},
+		{"POST", "/payroll", "admin", 409, "CONFLICT"},
+	} {
+		v := request(c.method, c.path, c.token, map[string]string{"period": "2026-11"}, c.status)
+		if v["success"] != false || v["error_code"] != c.code || v["message"] == "" {
+			t.Fatalf("%s %s: bad error envelope %v", c.method, c.path, v)
+		}
+	}
+	hw := httptest.NewRecorder()
+	e.ServeHTTP(hw, httptest.NewRequest("GET", "/health", nil))
+	if hw.Code != 200 || !strings.Contains(hw.Body.String(), `"database":"connected"`) || hw.Header().Get("X-Request-Id") == "" {
+		t.Fatalf("health: %d %s", hw.Code, hw.Body.String())
+	}
+
 	request("POST", "/auth/logout", token, nil, 200)
 	request("GET", "/auth/me", token, nil, 401)
 	if _, err = isolated.Exec(`UPDATE employees SET status='inactive' WHERE id=1`); err != nil {

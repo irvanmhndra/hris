@@ -24,13 +24,13 @@ func seed() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx := context.Background()
 	tx, err := db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var count int
 	if err = tx.Get(&count, `SELECT count(*) FROM companies WHERE slug='demo'`); err != nil {
 		return err

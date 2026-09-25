@@ -63,3 +63,22 @@ type AuditLog struct {
 	Summary    string    `db:"summary" json:"summary"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 }
+
+// HRData is the typed shape of hr_items.data (JSONB). Each module uses a
+// subset of fields; decoding into it keeps clients from injecting metadata.
+type HRData struct {
+	URL      string `json:"url,omitempty"`
+	Category string `json:"category,omitempty"`
+	Code     string `json:"code,omitempty"`
+	Serial   string `json:"serial,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Progress int    `json:"progress,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Position string `json:"position,omitempty"`
+	StartAt  string `json:"start_at,omitempty"`
+	EndAt    string `json:"end_at,omitempty"`
+	Date     string `json:"date,omitempty"`
+	CheckIn  string `json:"check_in,omitempty"`
+	CheckOut string `json:"check_out,omitempty"`
+	Original string `json:"original,omitempty"`
+}

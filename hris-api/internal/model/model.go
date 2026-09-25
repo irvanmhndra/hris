@@ -2,6 +2,11 @@ package model
 
 import "time"
 
+const (
+	RoleAdmin    = "admin"
+	RoleEmployee = "employee"
+)
+
 type User struct {
 	ID           int64  `db:"id" json:"id"`
 	CompanyID    int64  `db:"company_id" json:"company_id"`
