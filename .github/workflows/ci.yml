@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-lint:
+    name: "API: lint"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hris-api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache-dependency-path: hris-api/go.sum
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.3
+          working-directory: hris-api
+          args: --timeout=5m
+
+  api-test:
+    name: "API: unit + integration"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: hris
+          POSTGRES_PASSWORD: hris_ci
+          POSTGRES_DB: hris_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hris -d hris_test"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: hris-api
+    env:
+      TEST_DATABASE_URL: postgres://hris:hris_ci@127.0.0.1:5432/hris_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache-dependency-path: hris-api/go.sum
+      - run: go test -race -count=1 ./...
+      - name: Build binaries
+        run: |
+          CGO_ENABLED=0 go build -o bin/api ./cmd/api
+          CGO_ENABLED=0 go build -o bin/migrate ./cmd/migrate
+      - name: Migrations apply cleanly and are idempotent
+        env:
+          DATABASE_URL: postgres://hris:hris_ci@127.0.0.1:5432/hris_test?sslmode=disable
+        run: ./bin/migrate up && ./bin/migrate up && ./bin/migrate version
+
+  api-vuln:
+    name: "API: govulncheck"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hris-api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache-dependency-path: hris-api/go.sum
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  web:
+    name: "Web: typecheck + build"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hris-web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: hris-web/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: hris-web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
