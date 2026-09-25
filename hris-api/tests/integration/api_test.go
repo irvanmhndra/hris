@@ -1,0 +1,292 @@
+package integration
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/irvanmhndra/hris-api/internal/repository/postgres"
+	"github.com/irvanmhndra/hris-api/internal/router"
+	"github.com/irvanmhndra/hris-api/internal/service"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func TestHRISWorkflow(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL for PostgreSQL integration test")
+	}
+	db, err := sqlx.Connect("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	schema := fmt.Sprintf("hris_test_%d", time.Now().UnixNano())
+	if _, err = db.Exec(`CREATE SCHEMA ` + schema); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`)
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	isolated, err := sqlx.Connect("postgres", dsn+sep+"search_path="+schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer isolated.Close()
+	files, err := filepath.Glob("../../migrations/*.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		body, e := os.ReadFile(file)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = isolated.Exec(string(body)); e != nil {
+			t.Fatalf("%s: %v", file, e)
+		}
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte("TestPassword123!"), bcrypt.MinCost)
+	_, err = isolated.Exec(`INSERT INTO companies(id,name,slug) VALUES(1,'Alpha','alpha'),(2,'Beta','beta');
+ INSERT INTO departments(id,company_id,name) VALUES(1,1,'Engineering'),(2,2,'People');
+ INSERT INTO employees(id,company_id,code,name,email,department_id,position,joined_on) VALUES(1,1,'A1','Employee A','staff@alpha.test',1,'Engineer','2025-01-01'),(2,2,'B1','Employee B','staff@beta.test',2,'HR','2025-01-01');
+ SELECT setval('employees_id_seq',2);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []struct {
+		id, c       int
+		employee    any
+		email, role string
+	}{{1, 1, nil, "admin@alpha.test", "admin"}, {2, 1, 1, "staff@alpha.test", "employee"}, {3, 2, nil, "admin@beta.test", "admin"}, {4, 2, 2, "staff@beta.test", "employee"}} {
+		_, err = isolated.Exec(`INSERT INTO users(id,company_id,employee_id,name,email,password_hash,role) VALUES($1,$2,$3,'Test User',$4,$5,$6)`, u.id, u.c, u.employee, u.email, string(hash), u.role)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	isolated.Exec(`SELECT setval('users_id_seq',4)`)
+	repo := &postgres.Repository{DB: isolated}
+	e := router.New(&service.Service{Repo: repo})
+	request := func(method, path, token string, body any, want int) map[string]any {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, "/api/v1"+path, bytes.NewReader(b))
+		r.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: want %d, got %d: %s", method, path, want, w.Code, w.Body.String())
+		}
+		var v map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	session := func(id int64, token string) {
+		if err := repo.CreateSession(context.Background(), id, service.HashToken(token)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session(1, "admin")
+	session(2, "staff")
+	session(3, "other")
+	session(4, "otherstaff")
+	request("POST", "/auth/login", "", map[string]string{"company": "alpha", "email": "admin@alpha.test", "password": "wrong"}, 401)
+	login := request("POST", "/auth/login", "", map[string]string{"company": "alpha", "email": "admin@alpha.test", "password": "TestPassword123!"}, 200)
+	token := login["data"].(map[string]any)["token"].(string)
+	request("GET", "/auth/me", token, nil, 200)
+	request("GET", "/employees", "", nil, 401)
+	request("GET", "/employees", "staff", nil, 403)
+	rows := request("GET", "/employees", "admin", nil, 200)["data"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["name"] != "Employee A" {
+		t.Fatal("tenant isolation failed")
+	}
+	employee := map[string]any{"name": "New Person", "email": "new@alpha.test", "code": "A2", "department_id": 2, "position": "Engineer", "status": "active", "joined_on": "2026-01-01", "password": "NewPassword123!"}
+	request("POST", "/employees", "admin", employee, 422)
+	employee["department_id"] = 1
+	created := request("POST", "/employees", "admin", employee, 200)["data"].(map[string]any)["id"].(float64)
+	employee["email"] = "changed@alpha.test"
+	employee["password"] = ""
+	request("PUT", fmt.Sprintf("/employees/%.0f", created), "admin", employee, 200)
+	var accounts int
+	isolated.Get(&accounts, `SELECT count(*) FROM users WHERE employee_id=$1`, created)
+	if accounts != 1 {
+		t.Fatal("email change duplicated accounts")
+	}
+	employee["email"] = "staff@alpha.test"
+	request("PUT", fmt.Sprintf("/employees/%.0f", created), "admin", employee, 409)
+	request("PUT", "/employees/2", "admin", employee, 404)
+	request("POST", "/attendance/in", "admin", nil, 403)
+	request("POST", "/attendance/out", "staff", nil, 404)
+	request("POST", "/attendance/in", "staff", nil, 200)
+	request("POST", "/attendance/in", "staff", nil, 409)
+	request("POST", "/attendance/out", "staff", nil, 200)
+	request("POST", "/attendance/out", "staff", nil, 404)
+	if len(request("GET", "/attendances", "other", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("attendance leaked across companies")
+	}
+	leave := map[string]string{"kind": "annual", "start_date": "2026-11-10", "end_date": "2026-11-09", "reason": "Family gathering"}
+	request("POST", "/leaves", "staff", leave, 422)
+	leave["end_date"] = "2026-11-12"
+	request("POST", "/leaves", "staff", leave, 200)
+	request("POST", "/leaves", "staff", leave, 409)
+	if len(request("GET", "/leaves", "otherstaff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("leave leaked across companies")
+	}
+	request("PATCH", "/leaves/1", "other", map[string]string{"status": "approved"}, 404)
+	request("PATCH", "/leaves/1", "staff", map[string]string{"status": "approved"}, 403)
+	request("PATCH", "/leaves/1", "admin", map[string]string{"status": "approved"}, 200)
+	request("PATCH", "/leaves/1", "admin", map[string]string{"status": "rejected"}, 404)
+
+	// Leave balances preserve reservations, ignore holidays, and restore cancelled requests.
+	balances := request("GET", "/leave-balances?year=2026", "staff", nil, 200)["data"].([]any)
+	if len(balances) != 1 || balances[0].(map[string]any)["used"] != float64(3) {
+		t.Fatal("approved leave not charged")
+	}
+	// Simulate migrated leave without an allocation: changing defaults must preserve its entitlement.
+	if _, err = isolated.Exec(`DELETE FROM leave_allocations WHERE employee_id=1 AND year=2026`); err != nil {
+		t.Fatal(err)
+	}
+	calendar := map[string]any{"workdays": []int{1, 2, 3, 4, 5}, "annual_allowance": 8, "start_time": "09:00", "end_time": "18:00"}
+	request("PUT", "/calendar", "staff", calendar, 403)
+	request("PUT", "/calendar", "admin", calendar, 200)
+	preserved := request("GET", "/leave-balances?year=2026", "staff", nil, 200)["data"].([]any)[0].(map[string]any)
+	if preserved["allowance"] != float64(12) || preserved["used"] != float64(3) {
+		t.Fatalf("calendar change altered existing entitlement: %v", preserved)
+	}
+	future := request("GET", "/leave-balances?year=2028", "staff", nil, 200)["data"].([]any)[0].(map[string]any)
+	if future["allowance"] != float64(8) {
+		t.Fatal("new allocation did not use updated calendar default")
+	}
+	request("POST", "/holidays", "staff", map[string]string{"date": "2026-11-16", "name": "Company holiday"}, 403)
+	request("POST", "/holidays", "admin", map[string]string{"date": "2026-11-16", "name": "Company holiday"}, 200)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2026-11-13", "end_date": "2026-11-16", "reason": "Holiday test"}, 200)
+	leaveRows := request("GET", "/leaves", "staff", nil, 200)["data"].([]any)
+	pending := leaveRows[0].(map[string]any)
+	if pending["days"] != float64(1) {
+		t.Fatalf("expected one working day: %v", pending)
+	}
+	request("PUT", "/leave-balances/1", "admin", map[string]int{"year": 2026, "allowance": 3}, 409)
+	request("POST", fmt.Sprintf("/leaves/%.0f/cancel", pending["id"]), "staff", nil, 200)
+	request("PUT", "/leave-balances/1", "admin", map[string]int{"year": 2026, "allowance": 3}, 200)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2026-11-17", "end_date": "2026-11-17", "reason": "Insufficient balance"}, 409)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2026-11-14", "end_date": "2026-11-15", "reason": "Weekend only"}, 422)
+	request("PUT", "/leave-balances/1", "admin", map[string]int{"year": 2027, "allowance": 0}, 200)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2026-12-31", "end_date": "2027-01-04", "reason": "Cross-year balance"}, 409)
+
+	// Self-service profiles cannot mutate identity or another tenant.
+	request("PUT", "/profile", "staff", map[string]any{"phone": "0812345678", "name": "Injected Name", "employee_id": 2}, 200)
+	profile := request("GET", "/profile", "staff", nil, 200)["data"].(map[string]any)
+	if profile["name"] != "Employee A" || profile["phone"] != "0812345678" {
+		t.Fatal("profile identity boundary failed")
+	}
+	request("GET", "/employees/2/profile", "admin", nil, 404)
+
+	itemID := func(v map[string]any) int64 { return int64(v["data"].(map[string]any)["id"].(float64)) }
+	actionPath := func(module string, id int64) string { return fmt.Sprintf("/hr/%s/%d/action", module, id) }
+	announcement := map[string]any{"title": "Company update", "description": "Welcome everyone", "status": "draft", "data": map[string]any{}}
+	request("POST", "/hr/announcements", "staff", announcement, 403)
+	news := itemID(request("POST", "/hr/announcements", "admin", announcement, 200))
+	if len(request("GET", "/hr/announcements", "staff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("draft announcement leaked")
+	}
+	announcement["status"] = "published"
+	announcement["version"] = 1
+	request("PUT", fmt.Sprintf("/hr/announcements/%d", news), "admin", announcement, 200)
+	if len(request("GET", "/hr/announcements", "staff", nil, 200)["data"].([]any)) != 1 {
+		t.Fatal("published announcement missing")
+	}
+	if len(request("GET", "/hr/announcements", "otherstaff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("announcement tenant leak")
+	}
+	request("POST", "/hr/documents", "admin", map[string]any{"title": "Unsafe URL", "status": "published", "data": map[string]string{"url": "javascript:alert(1)"}}, 422)
+	onboarding := itemID(request("POST", "/hr/onboarding", "admin", map[string]any{"title": "Read handbook", "employee_id": 1, "status": "todo"}, 200))
+	request("PATCH", actionPath("onboarding", onboarding), "otherstaff", map[string]any{"action": "complete", "version": 1}, 404)
+	request("PATCH", actionPath("onboarding", onboarding), "staff", map[string]any{"action": "start", "version": 1}, 200)
+	request("PATCH", actionPath("onboarding", onboarding), "staff", map[string]any{"action": "complete", "version": 1}, 409)
+	request("PATCH", actionPath("onboarding", onboarding), "staff", map[string]any{"action": "complete", "version": 2}, 200)
+	goal := itemID(request("POST", "/hr/goals", "admin", map[string]any{"title": "Release HRIS", "employee_id": 1, "status": "active", "data": map[string]any{"target": "Deliver five features", "progress": 0}}, 200))
+	request("PATCH", actionPath("goals", goal), "staff", map[string]any{"action": "progress", "progress": 101, "version": 1}, 422)
+	request("PATCH", actionPath("goals", goal), "staff", map[string]any{"action": "progress", "progress": 100, "version": 1}, 200)
+	request("POST", "/hr/assets", "admin", map[string]any{"title": "Laptop", "employee_id": 2, "status": "assigned", "data": map[string]any{"code": "LAP-01"}}, 404)
+	request("POST", "/hr/assets", "admin", map[string]any{"title": "Laptop", "employee_id": 1, "status": "assigned", "data": map[string]any{"code": "LAP-01"}}, 200)
+	request("POST", "/hr/assets", "admin", map[string]any{"title": "Laptop duplicate", "status": "available", "data": map[string]any{"code": "LAP-01"}}, 409)
+	request("GET", "/hr/recruitment", "staff", nil, 403)
+	request("POST", "/hr/recruitment", "admin", map[string]any{"title": "Candidate Test", "status": "applied", "data": map[string]any{"email": "candidate@example.test", "position": "Engineer"}}, 200)
+	overtime := map[string]any{"title": "Release support", "description": "Support production release", "employee_id": 2, "data": map[string]any{"start_at": "2026-11-10T18:00:00+07:00", "end_at": "2026-11-10T20:00:00+07:00"}}
+	ot := itemID(request("POST", "/hr/overtime", "staff", overtime, 200))
+	request("POST", "/hr/overtime", "staff", overtime, 409)
+	request("PATCH", actionPath("overtime", ot), "staff", map[string]any{"action": "approve", "version": 1}, 403)
+	request("PATCH", actionPath("overtime", ot), "admin", map[string]any{"action": "approve", "version": 1}, 200)
+	request("PATCH", actionPath("overtime", ot), "admin", map[string]any{"action": "approve", "version": 1}, 409)
+	correction := itemID(request("POST", "/hr/corrections", "staff", map[string]any{"title": "Forgot attendance", "description": "Forgot to check in yesterday", "data": map[string]any{"date": "2020-01-06", "check_in": "09:00", "check_out": "18:00"}}, 200))
+	request("PATCH", actionPath("corrections", correction), "admin", map[string]any{"action": "approve", "version": 1}, 200)
+	var corrected int
+	if err := isolated.Get(&corrected, `SELECT count(*) FROM attendances WHERE company_id=1 AND employee_id=1 AND date='2020-01-06' AND check_out IS NOT NULL`); err != nil || corrected != 1 {
+		t.Fatal("approved correction not applied")
+	}
+
+	// Payroll snapshots, locking, per-employee confidentiality, and manual payment lifecycle.
+	request("GET", "/salaries", "staff", nil, 403)
+	request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 409)
+	salary := map[string]any{"basic_salary": 10000000, "allowance": 1000000, "deduction": 500000, "note": "Manual deductions verified"}
+	request("PUT", "/salaries/2", "admin", salary, 404)
+	request("PUT", "/salaries/1", "admin", salary, 200)
+	request("PUT", fmt.Sprintf("/salaries/%.0f", created), "admin", salary, 200)
+	run := itemID(request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 200))
+	request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 409)
+	if len(request("GET", "/payslips", "staff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("draft payslip leaked")
+	}
+	payrollRows := request("GET", fmt.Sprintf("/payroll/%d/slips", run), "admin", nil, 200)["data"].([]any)
+	if len(payrollRows) != 2 {
+		t.Fatal("payroll employee snapshot incomplete")
+	}
+	slip := payrollRows[0].(map[string]any)
+	if slip["net"] != float64(10500000) {
+		t.Fatal("wrong net salary")
+	}
+	salary["version"] = 1
+	salary["allowance"] = 1500000
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 200)
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 409)
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "other", map[string]string{"action": "finalize"}, 404)
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "finalize"}, 200)
+	salary["version"] = 2
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 409)
+	ownSlips := request("GET", "/payslips", "staff", nil, 200)["data"].([]any)
+	if len(ownSlips) != 1 || ownSlips[0].(map[string]any)["employee_id"] != float64(1) {
+		t.Fatal("payslip ownership failed")
+	}
+	if len(request("GET", "/payslips", "otherstaff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("payslip tenant leak")
+	}
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "paid"}, 422)
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "paid", "reference": "BANK-BATCH-001"}, 200)
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "void"}, 409)
+	request("GET", "/audit-logs", "staff", nil, 403)
+	if len(request("GET", "/audit-logs", "admin", nil, 200)["data"].([]any)) < 15 {
+		t.Fatal("audit trail incomplete")
+	}
+	request("POST", "/auth/logout", token, nil, 200)
+	request("GET", "/auth/me", token, nil, 401)
+	if _, err = isolated.Exec(`UPDATE employees SET status='inactive' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	request("GET", "/auth/me", "staff", nil, 401)
+}

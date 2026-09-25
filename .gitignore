@@ -1,0 +1,8 @@
+**/node_modules/
+**/dist/
+**/.turbo/
+**/.env
+**/bin/
+**/*.tsbuildinfo
+.DS_Store
+.playwright/

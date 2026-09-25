@@ -1,0 +1,1 @@
+export { HRISApp } from "./App";
