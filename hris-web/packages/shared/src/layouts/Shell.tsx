@@ -1,28 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
-  Building2,
   CalendarDays,
   ChevronRight,
-  Clock3,
-  LayoutDashboard,
   Leaf,
   LogOut,
   Menu,
-  Users,
-  Wallet,
-  FileText,
-  Megaphone,
-  ClipboardCheck,
-  Package,
-  Target,
-  BriefcaseBusiness,
-  UserRound,
-  History,
-  Settings2,
-  CalendarCheck,
+  type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import {
   client,
@@ -32,20 +18,23 @@ import {
   Loading,
   today,
 } from "../components/common";
-import { Attendances } from "../pages/Attendances";
-import { Departments } from "../pages/Departments";
-import { EmployeeHome } from "../pages/EmployeeHome";
-import { Employees } from "../pages/Employees";
-import { Leaves } from "../pages/Leaves";
 import { Login } from "../pages/Login";
-import { Overview } from "../pages/Overview";
-import { HRModule } from "../pages/HRModule";
-import { Calendar, Balances, Profiles, Audit } from "../pages/HRSettings";
-import { Payroll, Salaries, Payslips } from "../pages/Payroll";
 import { api } from "../services/api";
 import { useSession } from "../stores/session";
 import type { User } from "../types";
-export function Shell({ mode }: { mode: "admin" | "employee" }) {
+export type Mode = "admin" | "employee";
+export type NavItem = readonly [path: string, label: string, icon: LucideIcon];
+// Shell is the signed-in frame shared by both portals. Each portal passes its
+// own navigation and routes, so it bundles only the pages it can reach.
+export function Shell({
+  mode,
+  links,
+  children,
+}: {
+  mode: Mode;
+  links: readonly NavItem[];
+  children: ReactNode;
+}) {
   const { token, user, setSession, clear } = useSession();
   const me = useQuery({
     queryKey: ["/auth/me", token],
@@ -77,44 +66,6 @@ export function Shell({ mode }: { mode: "admin" | "employee" }) {
       </div>
     );
   const admin = mode === "admin";
-  const links = admin
-    ? ([
-        ["/", "Ringkasan", LayoutDashboard],
-        ["/employees", "Karyawan", Users],
-        ["/departments", "Departemen", Building2],
-        ["/attendance", "Kehadiran", Clock3],
-        ["/leaves", "Pengajuan cuti", CalendarDays],
-        ["/balances", "Saldo cuti", CalendarCheck],
-        ["/calendar", "Kalender kerja", CalendarDays],
-        ["/hr/overtime", "Lembur", Clock3],
-        ["/hr/corrections", "Koreksi absensi", ClipboardCheck],
-        ["/profiles", "Profil karyawan", UserRound],
-        ["/hr/announcements", "Pengumuman", Megaphone],
-        ["/hr/documents", "Dokumen kebijakan", FileText],
-        ["/hr/onboarding", "Onboarding", ClipboardCheck],
-        ["/hr/assets", "Inventaris aset", Package],
-        ["/hr/goals", "Target kinerja", Target],
-        ["/hr/recruitment", "Rekrutmen", BriefcaseBusiness],
-        ["/salaries", "Komponen gaji", Settings2],
-        ["/payroll", "Payroll", Wallet],
-        ["/audit", "Riwayat aktivitas", History],
-      ] as const)
-    : ([
-        ["/", "Beranda", LayoutDashboard],
-        ["/attendance", "Kehadiran saya", Clock3],
-        ["/leaves", "Cuti & izin", CalendarDays],
-        ["/balances", "Saldo cuti", CalendarCheck],
-        ["/calendar", "Kalender kerja", CalendarDays],
-        ["/hr/overtime", "Lembur saya", Clock3],
-        ["/hr/corrections", "Koreksi absensi", ClipboardCheck],
-        ["/profiles", "Profil saya", UserRound],
-        ["/hr/announcements", "Pengumuman", Megaphone],
-        ["/hr/documents", "Dokumen kebijakan", FileText],
-        ["/hr/onboarding", "Onboarding saya", ClipboardCheck],
-        ["/hr/assets", "Aset saya", Package],
-        ["/hr/goals", "Target saya", Target],
-        ["/payslips", "Slip gaji", Wallet],
-      ] as const);
   const current =
     links.find((x) => x[0] === location.pathname)?.[1] || "Workspace";
   return (
@@ -206,29 +157,12 @@ export function Shell({ mode }: { mode: "admin" | "employee" }) {
         </header>
         <main>
           <ErrorBox error={logoutError} />
-          <Routes>
-            <Route path="/" element={admin ? <Overview /> : <EmployeeHome />} />
-            {admin && (
-              <>
-                <Route path="/employees" element={<Employees />} />
-                <Route path="/departments" element={<Departments />} />
-                <Route path="/salaries" element={<Salaries />} />
-                <Route path="/payroll" element={<Payroll />} />
-                <Route path="/audit" element={<Audit />} />
-              </>
-            )}
-            <Route
-              path="/attendance"
-              element={<Attendances employee={!admin} />}
-            />
-            <Route path="/leaves" element={<Leaves employee={!admin} />} />
-            <Route path="/balances" element={<Balances />} />
-            <Route path="/calendar" element={<Calendar />} />
-            <Route path="/profiles" element={<Profiles />} />
-            <Route path="/hr/:module" element={<HRModule />} />
-            {!admin && <Route path="/payslips" element={<Payslips />} />}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <Suspense fallback={<Loading />}>
+            <Routes>
+              {children}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </main>
         <footer>
           People HRIS <span>Built around your people.</span>

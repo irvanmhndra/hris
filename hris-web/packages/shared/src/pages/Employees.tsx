@@ -1,79 +1,24 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Download, Plus, Search } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import {
-  Badge,
-  date,
-  Empty,
   ErrorBox,
-  initials,
   Loading,
   Modal,
+  Pager,
   today,
   useData,
+  useDebounced,
 } from "../components/common";
 import { Heading } from "../components/Heading";
-import { api } from "../services/api";
+import { api, apiPage, query } from "../services/api";
+import { EmployeeTable } from "../components/EmployeeTable";
 import type { Department, Employee } from "../types";
-export function EmployeeTable({
-  rows,
-  edit,
-}: {
-  rows: Employee[];
-  edit?: (e: Employee) => void;
-}) {
-  return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>KARYAWAN</th>
-            <th>DEPARTEMEN</th>
-            <th>JABATAN</th>
-            <th>BERGABUNG</th>
-            <th>STATUS</th>
-            {edit && <th />}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((e, i) => (
-            <tr key={e.id}>
-              <td>
-                <div className="person">
-                  <span className={`avatar tone-${i % 4}`}>
-                    {initials(e.name)}
-                  </span>
-                  <div>
-                    <strong>{e.name}</strong>
-                    <small>
-                      {e.code} · {e.email}
-                    </small>
-                  </div>
-                </div>
-              </td>
-              <td>
-                <span className="department-tag">{e.department}</span>
-              </td>
-              <td>{e.position}</td>
-              <td>{date(e.joined_on)}</td>
-              <td>
-                <Badge status={e.status} />
-              </td>
-              {edit && (
-                <td>
-                  <button className="text-button" onClick={() => edit(e)}>
-                    Edit
-                  </button>
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!rows.length && <Empty />}
-    </div>
-  );
-}
 function EmployeeForm({
   employee,
   close,
@@ -208,54 +153,72 @@ function EmployeeForm({
   );
 }
 export function Employees() {
-  const q = useData<Employee[]>("/employees");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<unknown>(null);
   const [editing, setEditing] = useState<Employee | null | undefined>(
     undefined,
   );
-  const rows =
-    q.data?.filter(
-      (e) =>
-        (!status || e.status === status) &&
-        `${e.name} ${e.code} ${e.email} ${e.department}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-    ) || [];
-  function download() {
-    const columns = [
-      "NIK",
-      "Nama",
-      "Email",
-      "Departemen",
-      "Jabatan",
-      "Status",
-      "Bergabung",
-    ];
-    const cell = (s: string) =>
-      '"' + (/^[=+@\-\t\r]/.test(s) ? "'" + s : s).replaceAll('"', '""') + '"';
-    const csv = [
-      columns,
-      ...rows.map((e) => [
-        e.code,
-        e.name,
-        e.email,
-        e.department,
-        e.position,
-        e.status,
-        e.joined_on,
-      ]),
-    ]
-      .map((r) => r.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "karyawan.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  const term = useDebounced(search.trim());
+  const filters = { search: term, status };
+  const q = useQuery({
+    queryKey: ["/employees", "page", term, status, page],
+    queryFn: () =>
+      apiPage<Employee>(
+        "/employees" + query({ ...filters, page, per_page: 25 }),
+      ),
+    placeholderData: keepPreviousData,
+  });
+  const rows = q.data?.items || [];
+  const total = q.data?.pagination.total_records ?? 0;
+  // The CSV covers every employee matching the filters, not just this page.
+  async function download() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const all = await api<Employee[]>("/employees" + query(filters));
+      const columns = [
+        "NIK",
+        "Nama",
+        "Email",
+        "Departemen",
+        "Jabatan",
+        "Status",
+        "Bergabung",
+      ];
+      const cell = (s: string) =>
+        '"' +
+        (/^[=+@\-\t\r]/.test(s) ? "'" + s : s).replaceAll('"', '""') +
+        '"';
+      const csv = [
+        columns,
+        ...all.map((e) => [
+          e.code,
+          e.name,
+          e.email,
+          e.department,
+          e.position,
+          e.status,
+          e.joined_on,
+        ]),
+      ]
+        .map((r) => r.map(cell).join(","))
+        .join("\r\n");
+      const url = URL.createObjectURL(
+        new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "karyawan.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(e);
+    } finally {
+      setExporting(false);
+    }
   }
   return (
     <>
@@ -267,10 +230,10 @@ export function Employees() {
         <button
           className="secondary"
           onClick={download}
-          disabled={!rows.length}
+          disabled={!total || exporting}
         >
           <Download size={16} />
-          Ekspor CSV
+          {exporting ? "Mengekspor…" : "Ekspor CSV"}
         </button>
         <button className="primary" onClick={() => setEditing(null)}>
           <Plus size={17} />
@@ -283,28 +246,36 @@ export function Employees() {
             <Search size={18} />
             <input
               aria-label="Cari karyawan"
-              placeholder="Cari nama, NIK, atau departemen…"
+              placeholder="Cari nama, NIK, email, atau departemen…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              maxLength={120}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <select
             aria-label="Filter status"
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(1);
+            }}
           >
             <option value="">Semua status</option>
             <option value="active">Aktif</option>
             <option value="inactive">Nonaktif</option>
           </select>
-          <span className="count">{rows.length} karyawan</span>
+          <span className="count">{total} karyawan</span>
         </div>
-        <ErrorBox error={q.error} />
+        <ErrorBox error={q.error || exportError} />
         {q.isLoading ? (
           <Loading />
         ) : (
           <EmployeeTable rows={rows} edit={setEditing} />
         )}
+        <Pager pagination={q.data?.pagination} onPage={setPage} />
       </section>
       {editing !== undefined && (
         <EmployeeForm

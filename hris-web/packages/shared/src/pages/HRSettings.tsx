@@ -19,7 +19,6 @@ import type {
   Balance,
   Profile,
   Employee,
-  AuditLog,
 } from "../types";
 const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 export function Calendar() {
@@ -513,43 +512,5 @@ function ProfileEditor({ path }: { path: string }) {
         </div>
       </form>
     </section>
-  );
-}
-export function Audit() {
-  const q = useData<AuditLog[]>("/audit-logs");
-  return (
-    <>
-      <Heading
-        eyebrow="AUDIT TRAIL"
-        title="Setiap perubahan, tercatat."
-        description="250 aktivitas terbaru pada cuti, kalender, profil, modul HR, dan payroll."
-      />
-      <section className="panel">
-        <ErrorBox error={q.error} />
-        {q.isLoading ? (
-          <Loading />
-        ) : (
-          <div className="record-list">
-            {q.data?.map((a) => (
-              <article className="audit-row" key={a.id}>
-                <div className="audit-dot" />
-                <div>
-                  <strong>{a.summary}</strong>
-                  <p>
-                    {a.actor} · {a.action} · {a.resource} #{a.resource_id}
-                  </p>
-                </div>
-                <time>
-                  {new Date(a.created_at).toLocaleString("id-ID", {
-                    timeZone: "Asia/Jakarta",
-                  })}
-                </time>
-              </article>
-            ))}
-            {!q.data?.length && <Empty />}
-          </div>
-        )}
-      </section>
-    </>
   );
 }

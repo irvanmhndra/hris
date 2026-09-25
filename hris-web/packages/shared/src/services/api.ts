@@ -1,9 +1,16 @@
 import { useSession } from "../stores/session";
-export async function api<T>(
+import type { Page, Pagination } from "../types";
+interface Envelope<T> {
+  data: T;
+  message?: string;
+  error_code?: string;
+  meta?: { pagination?: Pagination };
+}
+async function request<T>(
   path: string,
   method = "GET",
   body?: unknown,
-): Promise<T> {
+): Promise<Envelope<T>> {
   const token = useSession.getState().token;
   const response = await fetch(`/api/v1${path}`, {
     method,
@@ -21,5 +28,34 @@ export async function api<T>(
       useSession.getState().clear();
     throw new Error(data.message || "Permintaan gagal");
   }
-  return data.data as T;
+  return data as Envelope<T>;
+}
+export async function api<T>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
+  return (await request<T>(path, method, body)).data;
+}
+// apiPage reads a paginated list (?page=N) together with its pagination meta.
+export async function apiPage<T>(path: string): Promise<Page<T>> {
+  const res = await request<T[]>(path);
+  const items = res.data ?? [];
+  return {
+    items,
+    pagination: res.meta?.pagination ?? {
+      current_page: 1,
+      per_page: items.length,
+      total_records: items.length,
+      total_pages: 1,
+    },
+  };
+}
+// query builds a query string, skipping empty values.
+export function query(params: Record<string, string | number | undefined>) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params))
+    if (v !== undefined && v !== "") q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
 }

@@ -1,8 +1,9 @@
 import { QueryClient, useQuery } from "@tanstack/react-query";
-import { Leaf, X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, Leaf, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { statusLabels } from "../config/modules";
 import { api } from "../services/api";
+import type { Pagination } from "../types";
 export const client = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, staleTime: 15000, refetchOnWindowFocus: true },
@@ -33,6 +34,12 @@ export const time = (s: string | null) =>
         timeZone: "Asia/Jakarta",
       })
     : "—";
+export const rupiah = (value: number) =>
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(value);
 export const initials = (s: string) =>
   s
     .split(" ")
@@ -84,6 +91,49 @@ export function Loading() {
 }
 export function useData<T>(path: string) {
   return useQuery({ queryKey: [path], queryFn: () => api<T>(path) });
+}
+// useDebounced delays a fast-changing value (e.g. a search box) so each
+// keystroke does not trigger its own request.
+export function useDebounced<T>(value: T, ms = 300) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+export function Pager({
+  pagination,
+  onPage,
+}: {
+  pagination?: Pagination;
+  onPage: (page: number) => void;
+}) {
+  if (!pagination || pagination.total_pages <= 1) return null;
+  const { current_page: page, total_pages: pages } = pagination;
+  return (
+    <nav className="pager" aria-label="Halaman">
+      <button
+        className="secondary"
+        disabled={page <= 1}
+        onClick={() => onPage(page - 1)}
+        aria-label="Halaman sebelumnya"
+      >
+        <ChevronLeft size={15} />
+      </button>
+      <span>
+        Halaman {page} dari {pages}
+      </span>
+      <button
+        className="secondary"
+        disabled={page >= pages}
+        onClick={() => onPage(page + 1)}
+        aria-label="Halaman berikutnya"
+      >
+        <ChevronRight size={15} />
+      </button>
+    </nav>
+  );
 }
 export function Modal({
   title,

@@ -8,6 +8,7 @@ import {
   Leaf,
   Users,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "react-router";
 import {
   Badge,
@@ -20,13 +21,17 @@ import {
   useData,
 } from "../components/common";
 import { Heading } from "../components/Heading";
+import { apiPage } from "../services/api";
 import { useSession } from "../stores/session";
 import type { Dashboard, Department, Employee, Leave } from "../types";
-import { EmployeeTable } from "./Employees";
+import { EmployeeTable } from "../components/EmployeeTable";
 export function Overview() {
   const user = useSession((s) => s.user)!;
   const d = useData<Dashboard>("/dashboard");
-  const employees = useData<Employee[]>("/employees");
+  const employees = useQuery({
+    queryKey: ["/employees", "latest"],
+    queryFn: () => apiPage<Employee>("/employees?page=1&per_page=5"),
+  });
   const leaves = useData<Leave[]>("/leaves");
   const departments = useData<Department[]>("/departments");
   const stats = d.data;
@@ -214,7 +219,7 @@ export function Overview() {
           </NavLink>
         </div>
         <ErrorBox error={employees.error} />
-        {employees.data && <EmployeeTable rows={employees.data.slice(0, 5)} />}
+        {employees.data && <EmployeeTable rows={employees.data.items} />}
       </section>
     </>
   );

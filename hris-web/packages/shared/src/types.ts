@@ -141,3 +141,13 @@ export interface Payslip {
   note: string;
   version: number;
 }
+export interface Pagination {
+  current_page: number;
+  per_page: number;
+  total_records: number;
+  total_pages: number;
+}
+export interface Page<T> {
+  items: T[];
+  pagination: Pagination;
+}
