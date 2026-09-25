@@ -7,7 +7,7 @@ Aplikasi HRIS dengan API Go, web admin, dan portal karyawan. Arsitektur mengikut
 - Login per perusahaan, session token tersimpan sebagai hash, logout, dan pembatasan akses admin/karyawan.
 - Dashboard: karyawan aktif, kehadiran hari ini, pengajuan menunggu, dan komposisi departemen.
 - Departemen: daftar dan tambah.
-- Karyawan: daftar, cari, filter, tambah, edit, nonaktifkan, reset password melalui admin, dan ekspor CSV.
+- Karyawan: daftar berhalaman dengan pencarian dan filter di server, tambah, edit, nonaktifkan, reset password melalui admin, dan ekspor CSV seluruh hasil filter.
 - Akun portal dibuat bersama karyawan dalam transaksi database.
 - Absensi: check-in/check-out satu kali per hari, riwayat 100 catatan terbaru, zona waktu Asia/Jakarta.
 - Cuti tahunan/sakit/izin: pengajuan berdasarkan hari kerja, saldo per tahun, reservasi pengajuan pending, persetujuan/penolakan, dan pembatalan.
@@ -17,7 +17,7 @@ Aplikasi HRIS dengan API Go, web admin, dan portal karyawan. Arsitektur mengikut
 - Pengumuman dan dokumen kebijakan berbasis tautan HTTPS, dengan draft/publikasi/arsip.
 - Checklist onboarding, inventaris dan penugasan aset, target kinerja dan progres, serta pipeline kandidat rekrutmen.
 - Payroll bulanan: komponen gaji, snapshot draft, penyesuaian, finalisasi, ekspor CSV, slip pribadi yang bisa dicetak, dan pencatatan pembayaran manual.
-- Riwayat aktivitas modul HR/payroll (250 aktivitas terakhir).
+- Riwayat aktivitas modul HR/payroll, seluruh riwayat dengan pagination.
 - Tema indigo, sidebar responsif, dan portal khusus karyawan.
 - Semua data dibatasi `company_id`; karyawan hanya dapat melihat absensi dan cutinya sendiri.
 
@@ -29,6 +29,9 @@ Prasyarat: Go **1.26.6**, Node.js **24**, pnpm **10.6.2**, Docker Compose. Port:
 # Di root repository
 make db
 # Tunggu database healthy: docker compose ps
+
+# Terapkan migrasi yang belum jalan (aman diulang)
+make migrate
 
 # Sekali saja untuk database kosong
 SEED_PASSWORD='PeopleDemo2026!' make seed
@@ -42,7 +45,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Database dan tabel dibuat otomatis ketika volume Docker baru diinisialisasi. Jika volume sudah ada, jalankan migrasi baru secara berurutan; jangan hapus volume untuk memperbarui schema.
+Schema dikelola migration runner (`hris-api/cmd/migrate`), bukan lagi oleh `docker-entrypoint-initdb.d`. Setelah menarik perubahan yang berisi migrasi baru, cukup jalankan `make migrate` lagi; jangan hapus volume untuk memperbarui schema. Database yang dibuat dengan setup lama perlu satu langkah awal, lihat [Migrasi database](#migrasi-database).
 
 | Portal | URL | Email demo |
 |---|---|---|
@@ -51,12 +54,12 @@ Database dan tabel dibuat otomatis ketika volume Docker baru diinisialisasi. Jik
 
 Kode perusahaan: `demo`. Password sesuai `SEED_PASSWORD` saat menjalankan seed. Seed menolak menimpa perusahaan demo yang sudah ada. Data demo bukan data karyawan asli.
 
-`make api` menyediakan `DATABASE_URL` lokal melalui Makefile. Untuk menjalankan Go langsung, ekspor `DATABASE_URL` sesuai `hris-api/.env.example`; aplikasi tidak membaca file `.env` otomatis. Bila lingkungan GVM menetapkan `GOROOT` untuk versi lama, hapus variabel tersebut sebelum menjalankan Go 1.26.6.
+`make api` menyediakan `DATABASE_URL` lokal melalui Makefile. Untuk menjalankan Go langsung, ekspor variabel sesuai `hris-api/.env.example` (`DATABASE_URL`, `HTTP_ADDR`, opsional `CORS_ALLOWED_ORIGINS` dan `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` / `DB_CONN_MAX_LIFETIME`); aplikasi tidak membaca file `.env` otomatis. Bila lingkungan GVM menetapkan `GOROOT` untuk versi lama, hapus variabel tersebut sebelum menjalankan Go 1.26.6.
 
 Alternatif API dalam Docker:
 
 ```sh
-docker compose up -d --build
+docker compose up -d --build   # db → migrate (sekali jalan) → api
 # Seed hanya jika belum pernah dijalankan:
 docker compose run --rm -e SEED_PASSWORD='PeopleDemo2026!' api ./seed
 ```
@@ -67,23 +70,24 @@ Frontend tetap dijalankan dengan `pnpm dev`. Compose hanya mengikat port databas
 
 ```text
 hris-api/
-  cmd/api, cmd/seed       entry point dan data demo
+  cmd/api, cmd/migrate, cmd/seed   server, migration runner, data demo
   config                 konfigurasi environment
-  internal/app           dependency injection
+  internal/app           server, middleware global, wiring per domain
   internal/router        registrasi endpoint
   internal/middleware    session authentication dan role
-  internal/handler       binding DTO dan respons HTTP
-  internal/service       validasi dan operasi bisnis
-  internal/repository    kontrak repository
-  internal/repository/postgres
-  internal/model, dto    domain dan request
-  pkg/apperror, httputil  error dan response envelope
-  migrations             migrasi SQL up/down
+  internal/handler       satu handler per domain: binding dan respons HTTP
+  internal/service       satu service per domain: validasi, otorisasi, scope
+  internal/repository    kontrak repository per domain
+  internal/repository/postgres    implementasi SQL per domain
+  internal/model, dto    domain, input repository, dan request
+  pkg/apperror, httputil  error berkode dan response envelope
+  migrations             migrasi SQL up/down + runner ter-embed
   tests/integration      tes HTTP + PostgreSQL pada schema sementara
 hris-web/
-  apps/admin             entry point admin
-  apps/employee          entry point portal karyawan
+  apps/admin             entry point admin (@hris/shared/admin)
+  apps/employee          entry point portal karyawan (@hris/shared/employee)
   packages/shared/src/
+    portals              navigasi + rute lazy per portal
     pages, layouts, components
     services, stores     API client dan Zustand session
 ```
@@ -91,11 +95,12 @@ hris-web/
 ## Verifikasi
 
 ```sh
-make test     # PostgreSQL harus aktif; Go integration tests + TypeScript
+make lint     # go vet + golangci-lint
+make test     # PostgreSQL harus aktif; Go unit + integration tests + TypeScript
 make build    # API binary + production build kedua portal
 ```
 
-Tes integrasi membuat schema unik, menjalankan migrasi, menguji workflow, lalu menghapus schema miliknya sendiri. Data aplikasi tidak dihapus. `go test ./...` tanpa `TEST_DATABASE_URL` melewatkan tes integrasi secara eksplisit.
+Tes integrasi membuat schema unik, menjalankan migrasi lewat runner, menguji workflow, lalu menghapus schema miliknya sendiri. Data aplikasi tidak dihapus. `go test ./...` tanpa `TEST_DATABASE_URL` melewatkan tes integrasi secara eksplisit. Unit test service (aturan otorisasi dan scope) tidak butuh database. GitHub Actions (`.github/workflows/ci.yml`) menjalankan lint, unit + integration test dengan PostgreSQL, uji migrasi, govulncheck, serta typecheck dan build web pada setiap PR ke `main`.
 
 ## Payroll tanpa payment gateway
 
@@ -107,16 +112,25 @@ Tes integrasi membuat schema unik, menjalankan migrasi, menguji workflow, lalu m
 
 Data demo tambahan tersedia melalui `make seed-hr` setelah seed dasar. Nominalnya fiktif, bukan hasil perhitungan pajak. Seed tambahan tidak menimpa komponen gaji yang sudah ada.
 
-## Upgrade database awal
+## Migrasi database
 
-Untuk database yang sudah memiliki migrasi 000001 dan 000002, jalankan masing-masing migrasi berikut **sekali** secara berurutan:
+| Perintah | Fungsi |
+|---|---|
+| `make migrate` | Terapkan semua migrasi yang belum jalan |
+| `make migrate-version` | Tampilkan versi schema saat ini |
+| `make migrate-baseline` | Sekali saja: tandai 000001–000004 sudah diterapkan (`migrate force 4`) |
+| `cd hris-api && go run ./cmd/migrate down N` | Rollback N langkah; migrasi forward-only ditolak |
+
+**Database dari setup lama.** Database yang dibuat lewat mount `docker-entrypoint-initdb.d` belum punya `schema_migrations`, sehingga `make migrate` akan menolak dengan pesan agar menjalankan `migrate force 4`. Bila keempat migrasi sudah diterapkan (setup Docker lama menerapkan semuanya), jalankan sekali:
 
 ```sh
-docker compose exec -T db psql -U hris -d hris -v ON_ERROR_STOP=1 --single-transaction < hris-api/migrations/000003_hr_suite.up.sql
-docker compose exec -T db psql -U hris -d hris -v ON_ERROR_STOP=1 --single-transaction < hris-api/migrations/000004_payroll.up.sql
+make migrate-baseline
+make migrate          # sekarang: tidak ada perubahan
 ```
 
-Database baru menjalankan keempat migrasi otomatis melalui Docker. Migrasi 000003/000004 bersifat forward-only. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
+Bila database baru sampai 000002, jalankan `cd hris-api && go run ./cmd/migrate force 2`, lalu `make migrate` untuk menerapkan 000003 dan 000004. Untuk Compose, pakai `docker compose run --rm migrate ./migrate force 4` sebelum `docker compose up -d`.
+
+Migrasi 000003/000004 bersifat forward-only. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
 
 ## Batas implementasi saat ini
 
@@ -124,7 +138,7 @@ Payroll mendukung nominal agregat rupiah utuh dan pembayaran manual. Belum ada k
 
 Approval masih satu tingkat. Kalender kerja belum menjadi penjadwalan shift atau aturan keterlambatan; absensi/koreksi belum mendukung shift lintas tengah malam dan GPS/biometrik. Kuota cuti belum memiliki accrual/carry-over otomatis. Dokumen berupa tautan, tanpa upload/tanda tangan; izin file tetap diatur pada penyedia file. Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen mencatat kandidat dan tahapan, tanpa portal lowongan atau konversi otomatis menjadi karyawan.
 
-Session berlaku 12 jam, tanpa refresh token atau lupa-password mandiri. Manajemen perusahaan dilakukan lewat provisioning database; UI registrasi perusahaan belum tersedia. Daftar data belum memakai pagination server.
+Session berlaku 12 jam, tanpa refresh token atau lupa-password mandiri. Manajemen perusahaan dilakukan lewat provisioning database; UI registrasi perusahaan belum tersedia. Pagination server tersedia untuk karyawan dan audit log; daftar lain (absensi 100 terbaru, cuti, modul HR) masih dikembalikan utuh.
 
 Konfigurasi Compose dan akun demo ditujukan untuk pengembangan lokal. Untuk deployment, gunakan kredensial terpisah dan reverse proxy HTTPS: `/api` diteruskan ke API dan rute SPA ke `index.html`. `vite preview` tidak menyediakan proxy API pengembangan.
 

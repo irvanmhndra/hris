@@ -1,6 +1,26 @@
 # Kontrak API v1
 
-Prefix `/api/v1`. JSON sukses: `{ "success": true, "data": ... }`. JSON error aplikasi: `{ "success": false, "message": "..." }`. Status validasi 422, konflik 409, tidak ditemukan/sudah diproses 404, tidak terautentikasi 401, role salah 403. Middleware Echo dapat mengembalikan envelope default untuk 404/413/429.
+Prefix `/api/v1`. JSON sukses: `{ "success": true, "data": ... }`; daftar berhalaman menambah `meta.pagination`. Setiap error, termasuk yang berasal dari Echo (rute tidak ada, method salah, body > 1 MB, rate limit), memakai envelope yang sama:
+
+```json
+{ "success": false, "error_code": "VALIDATION_ERROR", "message": "Status tidak valid" }
+```
+
+| HTTP | error_code | Arti |
+|---|---|---|
+| 400 | BAD_REQUEST | Permintaan ditolak Echo sebelum mencapai handler |
+| 401 | UNAUTHORIZED | Belum login / session berakhir |
+| 403 | FORBIDDEN | Role tidak berhak |
+| 404 | NOT_FOUND | Data tidak ada, di luar scope, atau sudah diproses; juga rute tidak dikenal |
+| 405 | METHOD_NOT_ALLOWED | Method tidak didukung rute |
+| 409 | CONFLICT | Duplikat, versi basi, atau transaksi bersamaan |
+| 413 | PAYLOAD_TOO_LARGE | Body lebih dari 1 MB |
+| 422 | VALIDATION_ERROR | Input tidak lolos validasi, termasuk body JSON yang tidak dapat dibaca |
+| 429 | TOO_MANY_REQUESTS | Rate limit login |
+| 500 | INTERNAL_ERROR | Kesalahan server; detail hanya di log |
+| 503 | UNAVAILABLE | `/health`: database tidak terjangkau |
+
+Klien sebaiknya bercabang berdasarkan `error_code`, bukan teks `message`. Setiap respons membawa header `X-Request-Id` yang juga tercatat di log server.
 
 Login: `POST /auth/login`, body `{ "company": "demo", "email": "admin@demo.hris", "password": "..." }`, respons `{token,user}`. Kirim `Authorization: Bearer <token>` pada endpoint berikut.
 
@@ -10,7 +30,7 @@ Login: `POST /auth/login`, body `{ "company": "demo", "email": "admin@demo.hris"
 | POST | /auth/logout | semua | Cabut session |
 | GET | /dashboard | admin | Ringkasan perusahaan |
 | GET, POST | /departments | admin | Daftar / tambah `{name}` |
-| GET, POST | /employees | admin | Daftar / buat karyawan + akun |
+| GET, POST | /employees | admin | Daftar (lihat [pagination](#pagination)) / buat karyawan + akun |
 | PUT | /employees/:id | admin | Edit karyawan + akun |
 | GET | /attendances | semua | 100 catatan terbaru; karyawan hanya diri sendiri |
 | POST | /attendance/in | karyawan | Check-in hari ini |
@@ -29,7 +49,23 @@ Untuk edit, password kosong mempertahankan password lama. Password baru mencabut
 
 Body cuti: `{ "kind":"annual", "start_date":"2026-11-10", "end_date":"2026-11-11", "reason":"Keperluan keluarga" }`. `kind` menerima annual/sick/personal. Body keputusan `{ "status":"approved" }` atau `{ "status":"rejected" }`.
 
-`GET /health` berada di luar prefix dan mengecek liveness HTTP, bukan readiness database.
+`GET /health` berada di luar prefix dan mengecek readiness: 200 `{status:"ok",database:"connected"}` bila database menjawab ping dalam 2 detik, selain itu 503 `UNAVAILABLE`.
+
+## Pagination
+
+`GET /employees` dan `GET /audit-logs` menerima `page` (mulai 1) dan `per_page` (default 20, maksimal 100). Respons berhalaman:
+
+```json
+{
+  "success": true,
+  "data": [ ... ],
+  "meta": { "pagination": { "current_page": 2, "per_page": 25, "total_records": 52, "total_pages": 3 } }
+}
+```
+
+`/employees` juga menerima filter `search` (nama, NIK, email, atau departemen; tanpa beda huruf besar/kecil; `%` dan `_` dicari sebagai karakter biasa; maks. 120 karakter), `status` (`active`/`inactive`), dan `department_id`. Filter berlaku dengan atau tanpa `page`.
+
+Tanpa `page`, kedua endpoint mempertahankan perilaku lama agar klien lama tidak rusak: `/employees` mengembalikan seluruh data yang cocok (dipakai ekspor CSV dan pemilih karyawan), `/audit-logs` mengembalikan 250 aktivitas terbaru. Keduanya tanpa `meta`.
 
 ## Kalender, saldo, dan profil
 
@@ -43,7 +79,7 @@ Body cuti: `{ "kind":"annual", "start_date":"2026-11-10", "end_date":"2026-11-11
 | POST | /leaves/:id/cancel | karyawan | Batalkan milik sendiri; approved hanya sebelum mulai |
 | GET / PUT | /profile | karyawan | Kontak pribadi |
 | GET / PUT | /employees/:id/profile | admin | Kontak karyawan dalam perusahaan |
-| GET | /audit-logs | admin | 250 aktivitas terbaru modul HR/payroll |
+| GET | /audit-logs | admin | Aktivitas modul HR/payroll, terbaru dulu (lihat [pagination](#pagination)) |
 
 Body kalender: `{"workdays":[1,2,3,4,5],"annual_allowance":12,"start_time":"09:00","end_time":"18:00"}`. Minggu=0, Sabtu=6. Kalender tidak otomatis menilai keterlambatan. Body profil menerima `phone`, `address`, `emergency_name`, `emergency_phone`, `emergency_relation`; field identitas dari client tidak dipakai untuk mengubah data karyawan.
 
