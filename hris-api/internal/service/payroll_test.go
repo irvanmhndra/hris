@@ -113,3 +113,39 @@ func TestBuildPayroll(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPayrollLatenessAndAbsence(t *testing.T) {
+	cal := model.WorkCalendar{Workdays: []int64{1, 2, 3, 4, 5}, StartTime: "09:00", EndTime: "18:00"}
+	src := model.PayrollSource{
+		Settings: model.PayrollSettings{JKKRate: 24, LateDeduction: "per_minute", DeductAbsence: true},
+		Workdays: []int64{1, 2, 3, 4, 5},
+		Through:  "2026-03-04",
+		Schedule: model.ScheduleSource{
+			Calendar:    cal,
+			Employees:   []model.ScheduleEmployee{{ID: 1, Name: "A", JoinedOn: "2025-01-01"}},
+			Attendances: []model.Attendance{{EmployeeID: 1, Date: "2026-03-02", LateMinutes: 30}},
+			LeaveDays:   []model.ShiftAssignment{{EmployeeID: 1, Date: "2026-03-03"}},
+		},
+		Employees: []model.PayrollEmployee{{ID: 1, Name: "A", JoinedOn: "2025-01-01",
+			Salary: model.Salary{BasicSalary: 1_730_000, PTKPStatus: "TK/0", TaxMethod: "none"}}},
+	}
+	drafts, err := BuildPayroll(src, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := drafts[0]
+	// 2 Mar late 30 min, 3 Mar on leave, 4 Mar absent; 22 weekdays in March.
+	if d.AbsentDays != 1 || d.LateCount != 1 || d.LateMinutes != 30 || d.WorkedDays != 21 || d.PeriodDays != 22 {
+		t.Fatalf("attendance totals: %+v", d)
+	}
+	var late int64
+	for _, l := range d.Lines {
+		if l.Code == payroll.CodeLate {
+			late = l.Amount
+		}
+	}
+	// 30 minutes at Rp10,000/hour.
+	if late != 5_000 {
+		t.Fatalf("late deduction = %d", late)
+	}
+}

@@ -38,6 +38,25 @@ func ValidateSalary(v *dto.Salary) error {
 	if v.TaxMethod != payroll.TaxGross && v.TaxMethod != payroll.TaxGrossUp && v.TaxMethod != payroll.TaxNone {
 		return apperror.Invalid("Metode pajak tidak valid")
 	}
+	digits := func(s string, lengths ...int) bool {
+		if s == "" {
+			return true
+		}
+		for _, r := range s {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return len(lengths) == 0 || slices.Contains(lengths, len(s))
+	}
+	for _, f := range []*string{&v.NIK, &v.NPWP, &v.BPJSKesehatanNo, &v.BPJSKetenagakerjaNo} {
+		*f = strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(*f), ".", ""), "-", "")
+	}
+	if !digits(v.NIK, 16) || !digits(v.NPWP, 15, 16) || !digits(v.BPJSKesehatanNo) || !digits(v.BPJSKetenagakerjaNo) ||
+		len(v.BPJSKesehatanNo) > 20 || len(v.BPJSKetenagakerjaNo) > 20 ||
+		(v.BPJSKesehatanNo != "" && len(v.BPJSKesehatanNo) < 8) || (v.BPJSKetenagakerjaNo != "" && len(v.BPJSKetenagakerjaNo) < 8) {
+		return apperror.Invalid("NIK 16 digit, NPWP 15/16 digit, nomor BPJS 8–20 digit (boleh dikosongkan)")
+	}
 	if v.BPJSPensiun && !v.BPJSKetenagakerjaan {
 		return apperror.Invalid("Jaminan Pensiun membutuhkan kepesertaan BPJS Ketenagakerjaan")
 	}
@@ -82,6 +101,7 @@ func (s *PayrollService) SaveSalary(ctx context.Context, u *model.User, employee
 		BasicSalary: v.BasicSalary, PTKPStatus: v.PTKPStatus, TaxMethod: v.TaxMethod,
 		BPJSKesehatan: v.BPJSKesehatan, BPJSKetenagakerjaan: v.BPJSKetenagakerjaan,
 		BPJSPensiun: v.BPJSPensiun, OvertimeEligible: v.OvertimeEligible, Note: v.Note,
+		NIK: v.NIK, NPWP: v.NPWP, BPJSKesehatanNo: v.BPJSKesehatanNo, BPJSKetenagakerjaNo: v.BPJSKetenagakerjaNo,
 	}
 	for _, c := range v.Components {
 		in.Components = append(in.Components, model.SalaryComponent{
@@ -101,6 +121,18 @@ func (s *PayrollService) SaveSettings(ctx context.Context, u *model.User, v mode
 	}
 	if !validAmount(v.JPWageCap) || !validAmount(v.KesWageCap) {
 		return apperror.Invalid("Batas upah BPJS harus 0–1 triliun")
+	}
+	switch v.LateDeduction {
+	case "", "none":
+		v.LateDeduction, v.LateDeductionAmount = "none", 0
+	case "per_minute":
+		v.LateDeductionAmount = 0
+	case "per_occurrence":
+		if v.LateDeductionAmount < 1 || v.LateDeductionAmount > 1_000_000_000 {
+			return apperror.Invalid("Potongan per keterlambatan harus Rp1–Rp1 miliar")
+		}
+	default:
+		return apperror.Invalid("Aturan potongan keterlambatan tidak valid")
 	}
 	return s.repo.SaveSettings(ctx, u.CompanyID, u.ID, v)
 }
@@ -144,6 +176,12 @@ func ytdOf(v model.YearToDate) payroll.YearToDate {
 func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) ([]model.PayrollEntryDraft, error) {
 	end := start.AddDate(0, 1, -1)
 	cal := payroll.NewCalendar(src.Workdays, src.Holidays)
+	attendance := map[int64]model.AttendanceSummary{}
+	if through, err := time.Parse(time.DateOnly, src.Through); err == nil && !through.Before(start) {
+		for _, a := range summarize(src.Schedule, start, through) {
+			attendance[a.EmployeeID] = a
+		}
+	}
 	periodDays := cal.Workdays(start, end)
 	sixDayWeek := len(src.Workdays) >= 6
 	drafts := make([]model.PayrollEntryDraft, 0, len(src.Employees))
@@ -177,7 +215,12 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 				unpaid++
 			}
 		}
-		worked := max(cal.Workdays(from, to)-unpaid, 0)
+		att := attendance[emp.ID]
+		absent := 0
+		if src.Settings.DeductAbsence {
+			absent = att.AbsentDays
+		}
+		worked := max(cal.Workdays(from, to)-unpaid-absent, 0)
 		sal := emp.Salary
 
 		// Fixed monthly wage (basic + fixed allowances) is the base for
@@ -227,6 +270,21 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 				Amount: pay, Taxable: true,
 			})
 		}
+		// Lateness is deducted as a separate line HR can adjust on the draft.
+		var late int64
+		switch src.Settings.LateDeduction {
+		case "per_minute":
+			late = (wage*int64(att.LateMinutes) + payroll.HourlyDivisor*30) / (payroll.HourlyDivisor * 60)
+		case "per_occurrence":
+			late = src.Settings.LateDeductionAmount * int64(att.LateDays)
+		}
+		if late > 0 {
+			deductions = append(deductions, payroll.Line{
+				Kind: payroll.Deduction, Code: payroll.CodeLate,
+				Name:   fmt.Sprintf("Potongan keterlambatan (%d kali, %d menit)", att.LateDays, att.LateMinutes),
+				Amount: late,
+			})
+		}
 		if thrDate != nil {
 			if amount := payroll.THR(wage, joined, *thrDate); amount > 0 {
 				lines = append(lines, payroll.Line{
@@ -240,9 +298,10 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 			PTKPStatus: sal.PTKPStatus, TaxMethod: sal.TaxMethod, BPJSKesehatan: sal.BPJSKesehatan,
 			BPJSKetenagakerjaan: sal.BPJSKetenagakerjaan, BPJSPensiun: sal.BPJSPensiun,
 			FinalPeriod: final, WorkedDays: worked, PeriodDays: periodDays, UnpaidLeaveDays: unpaid, Note: sal.Note,
+			AbsentDays: absent, LateCount: att.LateDays, LateMinutes: att.LateMinutes, NIK: sal.NIK, NPWP: sal.NPWP,
 			OvertimeIDs: overtimeIDs,
 		}
-		if err := calculate(&d, append(lines, deductions...), settingsOf(src.Settings), ytdOf(emp.YTD)); err != nil {
+		if err := calculate(&d, append(lines, deductions...), settingsOf(src.Settings), ytdOf(emp.YTD), payroll.YearToDate{}); err != nil {
 			return nil, err
 		}
 		drafts = append(drafts, d)
@@ -252,9 +311,9 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 
 // calculate runs the statutory calculation on a slip's input lines and fills
 // its totals and stored lines.
-func calculate(d *model.PayrollEntryDraft, lines []payroll.Line, s payroll.Settings, ytd payroll.YearToDate) error {
+func calculate(d *model.PayrollEntryDraft, lines []payroll.Line, s payroll.Settings, ytd, base payroll.YearToDate) error {
 	r := payroll.Compute(payroll.Input{
-		Lines: lines, PTKP: d.PTKPStatus, TaxMethod: d.TaxMethod, Settings: s, Final: d.FinalPeriod, YTD: ytd,
+		Lines: lines, PTKP: d.PTKPStatus, TaxMethod: d.TaxMethod, Settings: s, Final: d.FinalPeriod, YTD: ytd, Base: base,
 		Enrollment: payroll.Enrollment{
 			Kesehatan: d.BPJSKesehatan, Ketenagakerjaan: d.BPJSKetenagakerjaan, Pensiun: d.BPJSPensiun,
 		},
@@ -284,7 +343,18 @@ func calculate(d *model.PayrollEntryDraft, lines []payroll.Line, s payroll.Setti
 // Payslips: admins see every slip (optionally of one run); employees only
 // their own finalized or paid slips.
 func (s *PayrollService) Payslips(ctx context.Context, u *model.User, runID int64) ([]model.Payslip, error) {
-	return s.repo.Payslips(ctx, u.CompanyID, ownScope(u), runID)
+	v, err := s.repo.Payslips(ctx, u.CompanyID, ownScope(u), runID)
+	for i := range v {
+		if p := &v[i]; p.TaxMethod != payroll.TaxNone && !p.FinalPeriod && p.RunKind == "regular" {
+			p.TERRate = payroll.TERRate(p.PTKPStatus, p.TaxableGross)
+		}
+	}
+	return v, err
+}
+
+// CreateCorrection opens a correction run for a finalized regular run.
+func (s *PayrollService) CreateCorrection(ctx context.Context, u *model.User, runID int64) (int64, error) {
+	return s.repo.CreateCorrection(ctx, u.CompanyID, u.ID, runID)
 }
 
 // ValidatePayslip normalises HR's adjustment lines. Only non-statutory codes
@@ -296,8 +366,8 @@ func ValidatePayslip(v *dto.Payslip) ([]payroll.Line, error) {
 	if len(v.Note) > 1000 {
 		return nil, apperror.Invalid("Catatan maksimal 1000 karakter")
 	}
-	if len(v.Lines) == 0 || len(v.Lines) > 60 {
-		return nil, apperror.Invalid("Slip harus berisi 1–60 baris")
+	if len(v.Lines) > 60 {
+		return nil, apperror.Invalid("Slip maksimal 60 baris")
 	}
 	lines := make([]payroll.Line, 0, len(v.Lines))
 	for _, l := range v.Lines {
@@ -333,7 +403,7 @@ func (s *PayrollService) SavePayslip(ctx context.Context, u *model.User, entryID
 				Name: "ini", PTKPStatus: c.PTKPStatus, TaxMethod: c.TaxMethod, BPJSKesehatan: c.BPJSKesehatan,
 				BPJSKetenagakerjaan: c.BPJSKetenagakerjaan, BPJSPensiun: c.BPJSPensiun, FinalPeriod: c.FinalPeriod,
 			}
-			err := calculate(&d, lines, settingsOf(c.Settings), ytdOf(c.YTD))
+			err := calculate(&d, lines, settingsOf(c.Settings), ytdOf(c.YTD), ytdOf(c.Base))
 			return d, err
 		})
 }

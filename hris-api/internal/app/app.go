@@ -26,6 +26,9 @@ func New(cfg config.Config) (*echo.Echo, *sqlx.DB, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, nil, errors.New("DATABASE_URL wajib diisi")
 	}
+	if _, err := newStorage(cfg); err != nil {
+		return nil, nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	db, err := sqlx.ConnectContext(ctx, "postgres", cfg.DatabaseURL)

@@ -17,6 +17,7 @@ const (
 	CodeOvertime     = "OVERTIME"
 	CodeTHR          = "THR"
 	CodeAdjustment   = "ADJUSTMENT"
+	CodeLate         = "LATE"
 	CodeTaxAllowance = "TAX_ALLOWANCE"
 	CodeTaxRefund    = "PPH21_REFUND"
 	CodePPh21        = "PPH21"
@@ -33,7 +34,7 @@ const (
 // InputCodes are the line codes HR may submit when adjusting a draft slip.
 var InputCodes = map[string]string{
 	CodeBasic: Earning, CodeAllowance: Earning, CodeOvertime: Earning, CodeTHR: Earning,
-	CodeAdjustment: "", CodeDeduction: Deduction,
+	CodeAdjustment: "", CodeDeduction: Deduction, CodeLate: Deduction,
 }
 
 // Tax methods. "none" leaves PPh 21 to HR (used for slips created before
@@ -95,6 +96,10 @@ type Input struct {
 	// the month they leave): PPh 21 uses the annual Pasal 17 calculation.
 	Final bool
 	YTD   YearToDate
+	// Base is what earlier slips of the same period already counted (a
+	// correction run): its gross and pension join this slip's for the tax
+	// bracket, and its tax is subtracted, so the slip carries the difference.
+	Base YearToDate
 }
 
 type Result struct {
@@ -153,11 +158,11 @@ func Compute(in Input) Result {
 	}
 
 	taxFor := func(extra int64) int64 {
-		gross := taxable + extra + benefit
+		gross := in.Base.Gross + taxable + extra + benefit
 		if in.Final {
-			return AnnualTax(in.PTKP, in.YTD, gross, pension)
+			return AnnualTax(in.PTKP, in.YTD, gross, in.Base.Pension+pension) - in.Base.Tax
 		}
-		return TERTax(in.PTKP, gross)
+		return TERTax(in.PTKP, gross) - in.Base.Tax
 	}
 	var tax, allowance int64
 	if in.TaxMethod != TaxNone {

@@ -182,3 +182,21 @@ func TestTHRAndProrate(t *testing.T) {
 		t.Fatal("prorate")
 	}
 }
+
+func TestComputeCorrectionDifference(t *testing.T) {
+	// The original slip taxed Rp10jt at TER A 2% (200k). A Rp2jt bonus moves
+	// the month to Rp12jt (4%, 480k): the correction withholds 280k more.
+	r := Compute(Input{
+		Lines:     []Line{{Kind: Earning, Code: CodeAdjustment, Name: "Bonus", Amount: 2_000_000, Taxable: true}},
+		PTKP:      "TK/0",
+		TaxMethod: TaxGross,
+		Base:      YearToDate{Gross: 10_000_000, Tax: 200_000},
+	})
+	if r.Tax != 280_000 || r.Net != 1_720_000 {
+		t.Fatalf("correction tax %d net %d", r.Tax, r.Net)
+	}
+	// An empty correction changes nothing.
+	if r := Compute(Input{PTKP: "TK/0", TaxMethod: TaxGross, Base: YearToDate{Gross: 10_000_000, Tax: 200_000}}); r.Tax != 0 || len(r.Lines) != 0 {
+		t.Fatalf("empty correction: %+v", r)
+	}
+}

@@ -16,6 +16,10 @@ type Salary struct {
 	BPJSKetenagakerjaan bool              `json:"bpjs_ketenagakerjaan"`
 	BPJSPensiun         bool              `json:"bpjs_pensiun"`
 	OvertimeEligible    bool              `json:"overtime_eligible"`
+	NIK                 string            `json:"nik"`
+	NPWP                string            `json:"npwp"`
+	BPJSKesehatanNo     string            `json:"bpjs_kesehatan_number"`
+	BPJSKetenagakerjaNo string            `json:"bpjs_ketenagakerjaan_number"`
 	Note                string            `json:"note"`
 	Components          []SalaryComponent `json:"components"`
 }

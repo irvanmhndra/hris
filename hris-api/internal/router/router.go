@@ -76,6 +76,7 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	admin.GET("/payroll/:id/slips", h.Payroll.Payslips)
 	admin.PUT("/payroll/slips/:id", h.Payroll.SavePayslip)
 	admin.PATCH("/payroll/:id/action", h.Payroll.PayrollAction)
+	admin.POST("/payroll/:id/correction", h.Payroll.CreateCorrection)
 	admin.GET("/departments", h.Employee.Departments)
 	admin.POST("/departments", h.Employee.CreateDepartment)
 	admin.GET("/employees", h.Employee.Employees)

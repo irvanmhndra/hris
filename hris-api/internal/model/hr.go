@@ -17,6 +17,7 @@ type WorkCalendar struct {
 	LeaveAccrual           string `db:"leave_accrual" json:"leave_accrual"`
 	CarryOverMax           int    `db:"carry_over_max" json:"carry_over_max"`
 	LeaveEligibilityMonths int    `db:"leave_eligibility_months" json:"leave_eligibility_months"`
+	CarryOverExpiryMonths  int    `db:"carry_over_expiry_months" json:"carry_over_expiry_months"`
 	// RequireLocation rejects check-in/out outside every attendance location.
 	RequireLocation bool `db:"require_location" json:"require_location"`
 }
@@ -40,6 +41,11 @@ type Balance struct {
 	JoinedOn      string `db:"joined_on" json:"-"`
 	PrevAllowance int    `db:"prev_allowance" json:"-"`
 	PrevUsed      int    `db:"prev_used" json:"-"`
+	// Days used/reserved up to the carry-over expiry date (year end when
+	// carried days never expire), and that date.
+	UsedEarly      int     `db:"used_early" json:"-"`
+	ReservedEarly  int     `db:"reserved_early" json:"-"`
+	CarryExpiresOn *string `db:"-" json:"carry_expires_on"`
 }
 type Profile struct {
 	EmployeeID        int64  `db:"employee_id" json:"employee_id"`

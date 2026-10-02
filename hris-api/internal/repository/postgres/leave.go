@@ -31,7 +31,7 @@ func workCalendar(ctx context.Context, q sqlx.QueryerContext, companyID int64) (
 		LeaveAccrual: leavepolicy.Annual}
 	err := sqlx.GetContext(ctx, q, &v, `
 		SELECT workdays, annual_allowance, start_time, end_time, leave_accrual, carry_over_max, leave_eligibility_months,
-		       require_location
+		       require_location, carry_over_expiry_months
 		FROM work_calendars WHERE company_id = $1`,
 		companyID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -41,7 +41,8 @@ func workCalendar(ctx context.Context, q sqlx.QueryerContext, companyID int64) (
 }
 
 func leavePolicy(c model.WorkCalendar) leavepolicy.Policy {
-	return leavepolicy.Policy{Accrual: c.LeaveAccrual, CarryOverMax: c.CarryOverMax, EligibilityMonths: c.LeaveEligibilityMonths}
+	return leavepolicy.Policy{Accrual: c.LeaveAccrual, CarryOverMax: c.CarryOverMax,
+		EligibilityMonths: c.LeaveEligibilityMonths, CarryOverExpiryMonths: c.CarryOverExpiryMonths}
 }
 
 func (r *leaveRepository) SaveCalendar(ctx context.Context, companyID, actorID int64, v model.WorkCalendar) error {
@@ -67,13 +68,15 @@ func (r *leaveRepository) SaveCalendar(ctx context.Context, companyID, actorID i
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO work_calendars (company_id, workdays, annual_allowance, start_time, end_time,
-		                            leave_accrual, carry_over_max, leave_eligibility_months, require_location)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                            leave_accrual, carry_over_max, leave_eligibility_months, require_location,
+		                            carry_over_expiry_months)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (company_id) DO UPDATE
 		SET workdays = $2, annual_allowance = $3, start_time = $4, end_time = $5,
-		    leave_accrual = $6, carry_over_max = $7, leave_eligibility_months = $8, require_location = $9`,
+		    leave_accrual = $6, carry_over_max = $7, leave_eligibility_months = $8, require_location = $9,
+		    carry_over_expiry_months = $10`,
 		companyID, v.Workdays, v.AnnualAllowance, v.StartTime, v.EndTime,
-		v.LeaveAccrual, v.CarryOverMax, v.LeaveEligibilityMonths, v.RequireLocation)
+		v.LeaveAccrual, v.CarryOverMax, v.LeaveEligibilityMonths, v.RequireLocation, v.CarryOverExpiryMonths)
 	if err != nil {
 		return err
 	}
@@ -133,14 +136,17 @@ func (r *leaveRepository) DeleteHoliday(ctx context.Context, companyID, actorID,
 // balancesSQL loads the raw annual-leave figures of a year: allowance
 // (per-employee allocation, else the company default, else 12), approved
 // (used) and pending (reserved) days, and the previous year's allowance and
-// usage for carry-over. Parameters: company, employee (nullable), year.
+// usage for carry-over, and days spent by the carry-over expiry date.
+// Parameters: company, employee (nullable), year, expiry date.
 const balancesSQL = `
 	SELECT e.id employee_id, e.name, e.joined_on::text joined_on, $3::integer AS "year",
 	       COALESCE(a.allowance, w.annual_allowance, 12) allowance,
 	       COALESCE(pa.allowance, w.annual_allowance, 12) prev_allowance,
 	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3) used,
 	       count(d.date) FILTER (WHERE l.status = 'pending' AND EXTRACT(year FROM d.date) = $3) reserved,
-	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3 - 1) prev_used
+	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3 - 1) prev_used,
+	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3 AND d.date <= $4::date) used_early,
+	       count(d.date) FILTER (WHERE l.status = 'pending' AND EXTRACT(year FROM d.date) = $3 AND d.date <= $4::date) reserved_early
 	FROM employees e
 	LEFT JOIN work_calendars w ON w.company_id = e.company_id
 	LEFT JOIN leave_allocations a ON a.company_id = e.company_id AND a.employee_id = e.id AND a.year = $3
@@ -160,8 +166,12 @@ func balances(ctx context.Context, q sqlx.QueryerContext, companyID int64, emplo
 		return nil, err
 	}
 	p := leavePolicy(cal)
+	expiry, expires := leavepolicy.CarryExpiry(p, year)
+	if !expires {
+		expiry = yearEnd(year)
+	}
 	v := []model.Balance{}
-	if err = sqlx.SelectContext(ctx, q, &v, balancesSQL, companyID, employeeID, year); err != nil {
+	if err = sqlx.SelectContext(ctx, q, &v, balancesSQL, companyID, employeeID, year, expiry.Format(time.DateOnly)); err != nil {
 		return nil, err
 	}
 	for i := range v {
@@ -172,7 +182,12 @@ func balances(ctx context.Context, q sqlx.QueryerContext, companyID int64, emplo
 		}
 		b.Accrued = leavepolicy.Accrued(p, b.Allowance, joined, year, asOf(year))
 		b.CarriedOver = leavepolicy.Carry(p, b.PrevAllowance, b.PrevUsed, joined, year)
-		b.Available = b.Accrued + b.CarriedOver - b.Used - b.Reserved
+		if expires && b.CarriedOver > 0 {
+			d := expiry.Format(time.DateOnly)
+			b.CarryExpiresOn = &d
+		}
+		usable := leavepolicy.UsableCarry(p, b.CarriedOver, b.UsedEarly+b.ReservedEarly, year, asOf(year))
+		b.Available = b.Accrued + usable - b.Used - b.Reserved
 	}
 	return v, nil
 }
@@ -264,11 +279,16 @@ func checkAnnualBalance(ctx context.Context, tx *sqlx.Tx, companyID, employeeID,
 			return sql.ErrNoRows
 		}
 		b := rows[0]
-		spent := b.Used
+		spent, early := b.Used, b.UsedEarly
 		if withReserved {
-			spent += b.Reserved
+			spent, early = spent+b.Reserved, early+b.ReservedEarly
 		}
-		if b.Accrued+b.CarriedOver < spent {
+		cal, err := workCalendar(ctx, tx, companyID)
+		if err != nil {
+			return err
+		}
+		carry := leavepolicy.UsableCarry(leavePolicy(cal), b.CarriedOver, early, y.Year, last)
+		if b.Accrued+carry < spent {
 			return apperror.Conflict(fmt.Sprintf("Saldo cuti tahun %d tidak mencukupi (termasuk akrual sampai %s)", y.Year, y.Last))
 		}
 	}

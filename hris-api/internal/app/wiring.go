@@ -1,6 +1,9 @@
 package app
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/irvanmhndra/hris-api/config"
 	"github.com/irvanmhndra/hris-api/internal/handler"
 	"github.com/irvanmhndra/hris-api/internal/repository"
@@ -71,7 +74,7 @@ func newServices(r repositories, cfg config.Config) services {
 		Audit:      service.NewAuditService(r.audit),
 		Dashboard:  service.NewDashboardService(r.dashboard),
 		Approval:   service.NewApprovalService(r.approval),
-		File:       service.NewFileService(r.file, storage.Local{Dir: cfg.UploadDir}),
+		File:       service.NewFileService(r.file, mustStorage(cfg)),
 	}
 }
 
@@ -89,4 +92,27 @@ func newHandlers(s services) *router.Handlers {
 		Approval:   handler.NewApprovalHandler(s.Approval),
 		File:       handler.NewFileHandler(s.File),
 	}
+}
+
+// newStorage picks the upload backend from configuration.
+func newStorage(cfg config.Config) (storage.Storage, error) {
+	switch cfg.Storage {
+	case "", "local":
+		return storage.Local{Dir: cfg.UploadDir}, nil
+	case "s3":
+		if cfg.S3.Endpoint == "" || cfg.S3.Bucket == "" || cfg.S3.AccessKeyID == "" || cfg.S3.SecretAccessKey == "" {
+			return nil, errors.New("STORAGE_DRIVER=s3 membutuhkan S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, dan S3_SECRET_ACCESS_KEY")
+		}
+		return storage.NewS3(storage.S3Config(cfg.S3))
+	}
+	return nil, fmt.Errorf("STORAGE_DRIVER tidak dikenal: %q", cfg.Storage)
+}
+
+// mustStorage is called after New has validated the configuration.
+func mustStorage(cfg config.Config) storage.Storage {
+	s, err := newStorage(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }

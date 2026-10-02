@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/repository"
@@ -21,9 +22,10 @@ func NewPayrollRepository(db *sqlx.DB) repository.PayrollRepository {
 // settings returns the company's payroll settings, or the defaults when the
 // company never saved any.
 func settings(ctx context.Context, q sqlx.QueryerContext, companyID int64) (model.PayrollSettings, error) {
-	v := model.PayrollSettings{JKKRate: 24, JPWageCap: 10_547_400, KesWageCap: 12_000_000}
+	v := model.PayrollSettings{JKKRate: 24, JPWageCap: 10_547_400, KesWageCap: 12_000_000, LateDeduction: "none"}
 	err := sqlx.GetContext(ctx, q, &v, `
-		SELECT jkk_rate, jp_wage_cap, kes_wage_cap FROM payroll_settings WHERE company_id = $1`,
+		SELECT jkk_rate, jp_wage_cap, kes_wage_cap, late_deduction, late_deduction_amount, deduct_absence
+		FROM payroll_settings WHERE company_id = $1`,
 		companyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
@@ -42,10 +44,12 @@ func (r *payrollRepository) SaveSettings(ctx context.Context, companyID, actorID
 	}
 	defer rollback(tx)
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO payroll_settings (company_id, jkk_rate, jp_wage_cap, kes_wage_cap)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (company_id) DO UPDATE SET jkk_rate = $2, jp_wage_cap = $3, kes_wage_cap = $4`,
-		companyID, v.JKKRate, v.JPWageCap, v.KesWageCap)
+		INSERT INTO payroll_settings (company_id, jkk_rate, jp_wage_cap, kes_wage_cap, late_deduction,
+		                              late_deduction_amount, deduct_absence)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (company_id) DO UPDATE SET jkk_rate = $2, jp_wage_cap = $3, kes_wage_cap = $4,
+		    late_deduction = $5, late_deduction_amount = $6, deduct_absence = $7`,
+		companyID, v.JKKRate, v.JPWageCap, v.KesWageCap, v.LateDeduction, v.LateDeductionAmount, v.DeductAbsence)
 	if err != nil {
 		return err
 	}
@@ -64,6 +68,9 @@ const salaryColumns = `
 	COALESCE(s.bpjs_ketenagakerjaan, true) bpjs_ketenagakerjaan,
 	COALESCE(s.bpjs_pensiun, true) bpjs_pensiun,
 	COALESCE(s.overtime_eligible, true) overtime_eligible,
+	COALESCE(s.nik, '') nik, COALESCE(s.npwp, '') npwp,
+	COALESCE(s.bpjs_kesehatan_number, '') bpjs_kesehatan_number,
+	COALESCE(s.bpjs_ketenagakerjaan_number, '') bpjs_ketenagakerjaan_number,
 	COALESCE(s.note, '') note`
 
 // attachComponents loads the salary components of the listed employees.
@@ -114,13 +121,16 @@ func (r *payrollRepository) SaveSalary(ctx context.Context, companyID, actorID, 
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO salary_profiles (company_id, employee_id, basic_salary, note, ptkp_status, tax_method,
-		                             bpjs_kesehatan, bpjs_ketenagakerjaan, bpjs_pensiun, overtime_eligible)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                             bpjs_kesehatan, bpjs_ketenagakerjaan, bpjs_pensiun, overtime_eligible,
+		                             nik, npwp, bpjs_kesehatan_number, bpjs_ketenagakerjaan_number)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (company_id, employee_id) DO UPDATE
 		SET basic_salary = $3, note = $4, ptkp_status = $5, tax_method = $6,
-		    bpjs_kesehatan = $7, bpjs_ketenagakerjaan = $8, bpjs_pensiun = $9, overtime_eligible = $10`,
+		    bpjs_kesehatan = $7, bpjs_ketenagakerjaan = $8, bpjs_pensiun = $9, overtime_eligible = $10,
+		    nik = $11, npwp = $12, bpjs_kesehatan_number = $13, bpjs_ketenagakerjaan_number = $14`,
 		companyID, employeeID, v.BasicSalary, v.Note, v.PTKPStatus, v.TaxMethod,
-		v.BPJSKesehatan, v.BPJSKetenagakerjaan, v.BPJSPensiun, v.OvertimeEligible)
+		v.BPJSKesehatan, v.BPJSKetenagakerjaan, v.BPJSPensiun, v.OvertimeEligible,
+		v.NIK, v.NPWP, v.BPJSKesehatanNo, v.BPJSKetenagakerjaNo)
 	if err != nil {
 		return err
 	}
@@ -149,7 +159,7 @@ func (r *payrollRepository) PayrollRuns(ctx context.Context, companyID int64) ([
 		SELECT r.id, to_char(r.period, 'YYYY-MM') period, r.status, count(e.id) employees,
 		       COALESCE(sum(e.basic_salary + e.allowance - e.deduction), 0) total,
 		       COALESCE(sum(e.pph21), 0) tax, COALESCE(sum(e.employer_cost), 0) employer_cost,
-		       r.thr_date::text thr_date, r.payment_reference, r.created_at
+		       r.thr_date::text thr_date, r.kind, r.corrects_run_id, r.payment_reference, r.created_at
 		FROM payroll_runs r
 		LEFT JOIN payroll_entries e ON e.run_id = r.id AND e.company_id = r.company_id
 		WHERE r.company_id = $1
@@ -163,7 +173,7 @@ func (r *payrollRepository) PayrollRuns(ctx context.Context, companyID int64) ([
 // given period. $1 company, $2 employee ids, $3 period start.
 const ytdSQL = `
 	SELECT e.employee_id, sum(e.taxable_gross) gross, sum(e.pension_deduction) pension,
-	       sum(e.pph21) tax, count(*) months
+	       sum(e.pph21) tax, count(DISTINCT r.period) months
 	FROM payroll_entries e
 	JOIN payroll_runs r ON r.company_id = e.company_id AND r.id = e.run_id
 	WHERE e.company_id = $1 AND e.employee_id = ANY($2)
@@ -229,6 +239,22 @@ func (r *payrollRepository) CreatePayroll(ctx context.Context, companyID, actorI
 	if err = tx.SelectContext(ctx, &src.Holidays, `
 		SELECT date::text FROM holidays WHERE company_id = $1`, companyID); err != nil {
 		return 0, err
+	}
+	// Attendance, leave, and schedules from the period start through today
+	// (or the period end), for lateness and absence.
+	start, err := time.Parse(time.DateOnly, periodStart)
+	if err != nil {
+		return 0, err
+	}
+	through := start.AddDate(0, 1, -1)
+	if now := time.Now().In(wib); now.Before(through) {
+		through = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	src.Through = through.Format(time.DateOnly)
+	if !through.Before(start) {
+		if src.Schedule, err = scheduleSource(ctx, tx, companyID, nil, periodStart, src.Through, true); err != nil {
+			return 0, err
+		}
 	}
 
 	// Employees who worked at least part of the period: active ones that
@@ -330,13 +356,16 @@ func (r *payrollRepository) CreatePayroll(ctx context.Context, companyID, actorI
 			       (company_id, run_id, employee_id, employee_name, employee_code, position, note,
 			        ptkp_status, tax_method, bpjs_kesehatan, bpjs_ketenagakerjaan, bpjs_pensiun,
 			        final_period, worked_days, period_days, basic_salary, allowance, deduction,
-			        taxable_gross, pension_deduction, pph21, employer_cost, unpaid_leave_days)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+			        taxable_gross, pension_deduction, pph21, employer_cost, unpaid_leave_days,
+			        absent_days, late_count, late_minutes, nik, npwp)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+			        $24, $25, $26, $27, $28)
 			RETURNING id`,
 			companyID, id, d.EmployeeID, d.Name, d.Code, d.Position, d.Note,
 			d.PTKPStatus, d.TaxMethod, d.BPJSKesehatan, d.BPJSKetenagakerjaan, d.BPJSPensiun,
 			d.FinalPeriod, d.WorkedDays, d.PeriodDays, d.BasicSalary, d.Allowance, d.Deduction,
 			d.TaxableGross, d.Pension, d.PPh21, d.EmployerCost, d.UnpaidLeaveDays,
+			d.AbsentDays, d.LateCount, d.LateMinutes, d.NIK, d.NPWP,
 		).Scan(&entryID); err != nil {
 			return 0, err
 		}
@@ -380,14 +409,18 @@ func (r *payrollRepository) Payslips(ctx context.Context, companyID int64, emplo
 		SELECT e.id, e.run_id, e.employee_id, e.employee_name, e.employee_code, e.position,
 		       to_char(r.period, 'YYYY-MM') period, r.status, e.basic_salary, e.allowance, e.deduction,
 		       (e.basic_salary + e.allowance - e.deduction) net, e.ptkp_status, e.tax_method,
-		       e.final_period, e.worked_days, e.period_days, e.unpaid_leave_days, e.taxable_gross, e.pph21, e.employer_cost,
+		       e.final_period, e.worked_days, e.period_days, e.unpaid_leave_days,
+		       e.absent_days, e.late_count, e.late_minutes, e.nik, e.npwp, r.kind run_kind,
+		       COALESCE(s.bpjs_kesehatan_number, '') bpjs_kesehatan_number,
+		       COALESCE(s.bpjs_ketenagakerjaan_number, '') bpjs_ketenagakerjaan_number, e.taxable_gross, e.pph21, e.employer_cost,
 		       e.note, e.version
 		FROM payroll_entries e
 		JOIN payroll_runs r ON r.id = e.run_id AND r.company_id = e.company_id
+		LEFT JOIN salary_profiles s ON s.company_id = e.company_id AND s.employee_id = e.employee_id
 		WHERE e.company_id = $1
 		  AND ($2::bigint IS NULL OR (e.employee_id = $2 AND r.status IN ('finalized', 'paid')))
 		  AND ($3::bigint = 0 OR e.run_id = $3)
-		ORDER BY r.period DESC, e.employee_name`,
+		ORDER BY r.period DESC, r.id DESC, e.employee_name`,
 		companyID, employeeID, runID)
 	if err != nil || len(v) == 0 {
 		return v, err
@@ -456,6 +489,17 @@ func (r *payrollRepository) SavePayslip(ctx context.Context, companyID, actorID,
 		return err
 	}
 	entry.YTD = ytd[entry.EmployeeID]
+	// Earlier locked slips of the same period (only exists for corrections).
+	if err = tx.GetContext(ctx, &entry.Base, `
+		SELECT COALESCE(sum(e.taxable_gross), 0) gross, COALESCE(sum(e.pension_deduction), 0) pension,
+		       COALESCE(sum(e.pph21), 0) tax, count(*) months
+		FROM payroll_entries e
+		JOIN payroll_runs r ON r.company_id = e.company_id AND r.id = e.run_id
+		WHERE e.company_id = $1 AND e.employee_id = $2 AND r.period = $3::date AND r.id <> $4
+		  AND r.status IN ('finalized', 'paid') AND e.tax_method <> 'none'`,
+		companyID, entry.EmployeeID, entry.Period, entry.RunID); err != nil {
+		return err
+	}
 	d, err := build(entry.PayslipContext)
 	if err != nil {
 		return err
@@ -531,4 +575,63 @@ func (r *payrollRepository) PayrollAction(ctx context.Context, companyID, actorI
 		return err
 	}
 	return tx.Commit()
+}
+
+// CreateCorrection opens a correction run for a locked regular run. It copies
+// every slip's tax snapshot with zero amounts; HR adds adjustment lines and
+// each slip then carries only the difference, including PPh 21. Corrections
+// are only allowed while no later regular run exists in the same year, so
+// year-to-date tax stays consistent.
+func (r *payrollRepository) CreateCorrection(ctx context.Context, companyID, actorID, runID int64) (int64, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+	var run struct {
+		Period string `db:"period"`
+		Status string `db:"status"`
+		Kind   string `db:"kind"`
+		model.PayrollSettings
+	}
+	if err = tx.GetContext(ctx, &run, `
+		SELECT period::text, status, kind, jkk_rate, jp_wage_cap, kes_wage_cap
+		FROM payroll_runs WHERE company_id = $1 AND id = $2 FOR UPDATE`,
+		companyID, runID); err != nil {
+		return 0, err
+	}
+	if run.Kind != "regular" || (run.Status != "finalized" && run.Status != "paid") {
+		return 0, apperror.Conflict("Koreksi hanya untuk payroll reguler yang sudah difinalisasi")
+	}
+	var later bool
+	if err = tx.GetContext(ctx, &later, `
+		SELECT EXISTS (SELECT 1 FROM payroll_runs WHERE company_id = $1 AND kind = 'regular' AND status <> 'void'
+		               AND period > $2::date AND date_trunc('year', period) = date_trunc('year', $2::date))`,
+		companyID, run.Period); err != nil {
+		return 0, err
+	}
+	if later {
+		return 0, apperror.Conflict("Koreksi hanya untuk periode terakhir tahun berjalan; tambahkan penyesuaian di payroll berikutnya")
+	}
+	var id int64
+	if err = tx.GetContext(ctx, &id, `
+		INSERT INTO payroll_runs (company_id, period, created_by, jkk_rate, jp_wage_cap, kes_wage_cap, kind, corrects_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, 'correction', $7) RETURNING id`,
+		companyID, run.Period, actorID, run.JKKRate, run.JPWageCap, run.KesWageCap, runID); err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO payroll_entries (company_id, run_id, employee_id, employee_name, employee_code, position,
+		                             basic_salary, allowance, deduction, ptkp_status, tax_method, final_period,
+		                             worked_days, period_days, nik, npwp)
+		SELECT company_id, $3, employee_id, employee_name, employee_code, position, 0, 0, 0, ptkp_status,
+		       tax_method, final_period, worked_days, period_days, nik, npwp
+		FROM payroll_entries WHERE company_id = $1 AND run_id = $2`,
+		companyID, runID, id); err != nil {
+		return 0, err
+	}
+	if err = audit(ctx, tx, companyID, actorID, "create", "payroll", id, "Membuat koreksi payroll "+run.Period); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }

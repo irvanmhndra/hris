@@ -8,6 +8,13 @@ type PayrollSettings struct {
 	JKKRate    int64 `db:"jkk_rate" json:"jkk_rate"`
 	JPWageCap  int64 `db:"jp_wage_cap" json:"jp_wage_cap"`
 	KesWageCap int64 `db:"kes_wage_cap" json:"kes_wage_cap"`
+	// LateDeduction: "none", "per_minute" (hourly wage 1/173 per minute
+	// late), or "per_occurrence" (LateDeductionAmount per late check-in).
+	LateDeduction       string `db:"late_deduction" json:"late_deduction"`
+	LateDeductionAmount int64  `db:"late_deduction_amount" json:"late_deduction_amount"`
+	// DeductAbsence treats scheduled days without attendance or approved
+	// leave as unpaid.
+	DeductAbsence bool `db:"deduct_absence" json:"deduct_absence"`
 }
 
 // SalaryComponent is a recurring allowance or deduction. Fixed allowances
@@ -33,6 +40,10 @@ type Salary struct {
 	BPJSKetenagakerjaan bool              `db:"bpjs_ketenagakerjaan" json:"bpjs_ketenagakerjaan"`
 	BPJSPensiun         bool              `db:"bpjs_pensiun" json:"bpjs_pensiun"`
 	OvertimeEligible    bool              `db:"overtime_eligible" json:"overtime_eligible"`
+	NIK                 string            `db:"nik" json:"nik"`
+	NPWP                string            `db:"npwp" json:"npwp"`
+	BPJSKesehatanNo     string            `db:"bpjs_kesehatan_number" json:"bpjs_kesehatan_number"`
+	BPJSKetenagakerjaNo string            `db:"bpjs_ketenagakerjaan_number" json:"bpjs_ketenagakerjaan_number"`
 	Note                string            `db:"note" json:"note"`
 	Components          []SalaryComponent `db:"-" json:"components"`
 }
@@ -46,6 +57,8 @@ type PayrollRun struct {
 	Tax              int64     `db:"tax" json:"tax"`
 	EmployerCost     int64     `db:"employer_cost" json:"employer_cost"`
 	THRDate          *string   `db:"thr_date" json:"thr_date"`
+	Kind             string    `db:"kind" json:"kind"`
+	CorrectsRunID    *int64    `db:"corrects_run_id" json:"corrects_run_id"`
 	PaymentReference string    `db:"payment_reference" json:"payment_reference"`
 	CreatedAt        time.Time `db:"created_at" json:"created_at"`
 }
@@ -63,24 +76,35 @@ type PayrollLine struct {
 // Payslip totals: allowance is every earning except basic salary; deduction
 // is every deduction, including BPJS and PPh 21.
 type Payslip struct {
-	ID           int64         `db:"id" json:"id"`
-	RunID        int64         `db:"run_id" json:"run_id"`
-	EmployeeID   int64         `db:"employee_id" json:"employee_id"`
-	EmployeeName string        `db:"employee_name" json:"employee_name"`
-	EmployeeCode string        `db:"employee_code" json:"employee_code"`
-	Position     string        `db:"position" json:"position"`
-	Period       string        `db:"period" json:"period"`
-	Status       string        `db:"status" json:"status"`
-	BasicSalary  int64         `db:"basic_salary" json:"basic_salary"`
-	Allowance    int64         `db:"allowance" json:"allowance"`
-	Deduction    int64         `db:"deduction" json:"deduction"`
-	Net          int64         `db:"net" json:"net"`
-	PTKPStatus   string        `db:"ptkp_status" json:"ptkp_status"`
-	TaxMethod    string        `db:"tax_method" json:"tax_method"`
-	FinalPeriod  bool          `db:"final_period" json:"final_period"`
-	WorkedDays   int           `db:"worked_days" json:"worked_days"`
-	PeriodDays   int           `db:"period_days" json:"period_days"`
-	UnpaidDays   int           `db:"unpaid_leave_days" json:"unpaid_leave_days"`
+	ID           int64  `db:"id" json:"id"`
+	RunID        int64  `db:"run_id" json:"run_id"`
+	EmployeeID   int64  `db:"employee_id" json:"employee_id"`
+	EmployeeName string `db:"employee_name" json:"employee_name"`
+	EmployeeCode string `db:"employee_code" json:"employee_code"`
+	Position     string `db:"position" json:"position"`
+	Period       string `db:"period" json:"period"`
+	Status       string `db:"status" json:"status"`
+	BasicSalary  int64  `db:"basic_salary" json:"basic_salary"`
+	Allowance    int64  `db:"allowance" json:"allowance"`
+	Deduction    int64  `db:"deduction" json:"deduction"`
+	Net          int64  `db:"net" json:"net"`
+	PTKPStatus   string `db:"ptkp_status" json:"ptkp_status"`
+	TaxMethod    string `db:"tax_method" json:"tax_method"`
+	FinalPeriod  bool   `db:"final_period" json:"final_period"`
+	WorkedDays   int    `db:"worked_days" json:"worked_days"`
+	PeriodDays   int    `db:"period_days" json:"period_days"`
+	UnpaidDays   int    `db:"unpaid_leave_days" json:"unpaid_leave_days"`
+	AbsentDays   int    `db:"absent_days" json:"absent_days"`
+	LateCount    int    `db:"late_count" json:"late_count"`
+	LateMinutes  int    `db:"late_minutes" json:"late_minutes"`
+	NIK          string `db:"nik" json:"nik"`
+	NPWP         string `db:"npwp" json:"npwp"`
+	BPJSKesNo    string `db:"bpjs_kesehatan_number" json:"bpjs_kesehatan_number"`
+	BPJSTKNo     string `db:"bpjs_ketenagakerjaan_number" json:"bpjs_ketenagakerjaan_number"`
+	RunKind      string `db:"run_kind" json:"run_kind"`
+	// TERRate is the monthly TER rate (hundredths of a percent) the slip's
+	// gross falls in; 0 for annual or manual slips.
+	TERRate      int64         `db:"-" json:"ter_rate"`
 	TaxableGross int64         `db:"taxable_gross" json:"taxable_gross"`
 	PPh21        int64         `db:"pph21" json:"pph21"`
 	EmployerCost int64         `db:"employer_cost" json:"employer_cost"`
@@ -123,7 +147,11 @@ type PayrollEmployee struct {
 
 // PayrollSource is read in one repeatable-read snapshot when a run is created.
 type PayrollSource struct {
-	Settings  PayrollSettings
+	Settings PayrollSettings
+	// Schedule holds attendance records, leave, and schedules of the period
+	// up to today, for lateness and absence.
+	Schedule  ScheduleSource
+	Through   string
 	Workdays  []int64
 	Holidays  []string
 	Employees []PayrollEmployee
@@ -140,6 +168,9 @@ type PayslipContext struct {
 	BPJSPensiun         bool   `db:"bpjs_pensiun"`
 	FinalPeriod         bool   `db:"final_period"`
 	YTD                 YearToDate
+	// Base sums earlier locked slips of the same employee and period (for
+	// correction runs).
+	Base YearToDate
 }
 
 // PayrollEntryDraft is a calculated slip ready to be stored.
@@ -157,6 +188,11 @@ type PayrollEntryDraft struct {
 	WorkedDays          int
 	PeriodDays          int
 	UnpaidLeaveDays     int
+	AbsentDays          int
+	LateCount           int
+	LateMinutes         int
+	NIK                 string
+	NPWP                string
 	BasicSalary         int64
 	Allowance           int64
 	Deduction           int64

@@ -46,3 +46,20 @@ func TestCarry(t *testing.T) {
 		t.Fatalf("disabled carry = %d", got)
 	}
 }
+
+func TestCarryExpiry(t *testing.T) {
+	p := Policy{Accrual: Annual, CarryOverMax: 5, CarryOverExpiryMonths: 3}
+	exp, ok := CarryExpiry(p, 2026)
+	if !ok || exp.Format(time.DateOnly) != "2026-03-31" {
+		t.Fatalf("expiry %v %v", exp, ok)
+	}
+	if UsableCarry(p, 5, 2, 2026, d("2026-03-31")) != 5 {
+		t.Fatal("before expiry all carry is usable")
+	}
+	if UsableCarry(p, 5, 2, 2026, d("2026-04-01")) != 2 {
+		t.Fatal("after expiry only carry spent by the expiry date counts")
+	}
+	if _, ok := CarryExpiry(Policy{CarryOverMax: 5}, 2026); ok {
+		t.Fatal("no expiry configured")
+	}
+}

@@ -88,6 +88,7 @@ type PayrollRepository interface {
 	SavePayslip(ctx context.Context, companyID, actorID, entryID int64, version int, note string,
 		build func(model.PayslipContext) (model.PayrollEntryDraft, error)) error
 	PayrollAction(ctx context.Context, companyID, actorID, runID int64, action, reference string) error
+	CreateCorrection(ctx context.Context, companyID, actorID, runID int64) (int64, error)
 }
 
 // ApprovalRepository handles the manager stage of two-step approvals.

@@ -44,22 +44,26 @@ func (r *attendanceRepository) Attendances(ctx context.Context, companyID int64,
 // given employees (nil = every employee) between from and to. With
 // withRecords it also loads attendances and approved leave days.
 func (r *attendanceRepository) ScheduleSource(ctx context.Context, companyID int64, employeeID *int64, from, to string, withRecords bool) (model.ScheduleSource, error) {
+	return scheduleSource(ctx, r.db, companyID, employeeID, from, to, withRecords)
+}
+
+func scheduleSource(ctx context.Context, q sqlx.QueryerContext, companyID int64, employeeID *int64, from, to string, withRecords bool) (model.ScheduleSource, error) {
 	var src model.ScheduleSource
 	var err error
-	if src.Calendar, err = workCalendar(ctx, r.db, companyID); err != nil {
+	if src.Calendar, err = workCalendar(ctx, q, companyID); err != nil {
 		return src, err
 	}
-	if err = r.db.SelectContext(ctx, &src.Holidays, `
+	if err = sqlx.SelectContext(ctx, q, &src.Holidays, `
 		SELECT date::text FROM holidays WHERE company_id = $1 AND date BETWEEN $2 AND $3`,
 		companyID, from, to); err != nil {
 		return src, err
 	}
-	if err = r.db.SelectContext(ctx, &src.Shifts, `
+	if err = sqlx.SelectContext(ctx, q, &src.Shifts, `
 		SELECT id, name, start_time, end_time, grace_minutes, active FROM shifts WHERE company_id = $1 ORDER BY name`,
 		companyID); err != nil {
 		return src, err
 	}
-	if err = r.db.SelectContext(ctx, &src.Employees, `
+	if err = sqlx.SelectContext(ctx, q, &src.Employees, `
 		SELECT id, name, shift_id, joined_on::text joined_on, left_on::text left_on
 		FROM employees
 		WHERE company_id = $1 AND ($2::bigint IS NULL OR id = $2)
@@ -68,13 +72,13 @@ func (r *attendanceRepository) ScheduleSource(ctx context.Context, companyID int
 		companyID, employeeID, from, to); err != nil {
 		return src, err
 	}
-	if err = r.db.SelectContext(ctx, &src.Assignments, `
+	if err = sqlx.SelectContext(ctx, q, &src.Assignments, `
 		SELECT employee_id, date::text date, shift_id FROM shift_assignments
 		WHERE company_id = $1 AND ($2::bigint IS NULL OR employee_id = $2) AND date BETWEEN $3 AND $4`,
 		companyID, employeeID, from, to); err != nil {
 		return src, err
 	}
-	if err = r.db.SelectContext(ctx, &src.Locations, `
+	if err = sqlx.SelectContext(ctx, q, &src.Locations, `
 		SELECT id, name, latitude, longitude, radius_m FROM attendance_locations WHERE company_id = $1 ORDER BY name`,
 		companyID); err != nil {
 		return src, err
@@ -82,14 +86,14 @@ func (r *attendanceRepository) ScheduleSource(ctx context.Context, companyID int
 	if !withRecords {
 		return src, nil
 	}
-	if err = r.db.SelectContext(ctx, &src.Attendances, `
+	if err = sqlx.SelectContext(ctx, q, &src.Attendances, `
 		SELECT `+attendanceFields+`
 		FROM attendances a JOIN employees e ON e.id = a.employee_id
 		WHERE a.company_id = $1 AND ($2::bigint IS NULL OR a.employee_id = $2) AND a.date BETWEEN $3 AND $4`,
 		companyID, employeeID, from, to); err != nil {
 		return src, err
 	}
-	err = r.db.SelectContext(ctx, &src.LeaveDays, `
+	err = sqlx.SelectContext(ctx, q, &src.LeaveDays, `
 		SELECT l.employee_id, d.date::text date
 		FROM leave_days d JOIN leave_requests l ON l.company_id = d.company_id AND l.id = d.leave_id
 		WHERE l.company_id = $1 AND ($2::bigint IS NULL OR l.employee_id = $2) AND l.status = 'approved'

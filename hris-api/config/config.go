@@ -19,9 +19,20 @@ type Config struct {
 	// Portal URLs used in emailed links, e.g. password resets.
 	AdminURL    string
 	EmployeeURL string
-	// UploadDir stores uploaded files on local disk.
+	// Storage is "local" (UploadDir) or "s3" (S3, also Cloudflare R2/MinIO).
+	Storage   string
 	UploadDir string
+	S3        S3Config
 	SMTP      SMTPConfig
+}
+
+type S3Config struct {
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+	Region          string
+	UseSSL          bool
 }
 
 // SMTPConfig sends email. Without a host, emails are written to the log
@@ -53,7 +64,16 @@ func Load() Config {
 		SignupEnabled: os.Getenv("SIGNUP_ENABLED") == "true",
 		AdminURL:      strings.TrimRight(env("ADMIN_URL", "http://127.0.0.1:5180"), "/"),
 		EmployeeURL:   strings.TrimRight(env("EMPLOYEE_URL", "http://127.0.0.1:5181"), "/"),
+		Storage:       env("STORAGE_DRIVER", "local"),
 		UploadDir:     env("UPLOAD_DIR", "data/uploads"),
+		S3: S3Config{
+			Endpoint:        os.Getenv("S3_ENDPOINT"),
+			Bucket:          os.Getenv("S3_BUCKET"),
+			AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+			Region:          env("S3_REGION", "auto"),
+			UseSSL:          os.Getenv("S3_USE_SSL") != "false",
+		},
 		SMTP: SMTPConfig{
 			Host:     os.Getenv("SMTP_HOST"),
 			Port:     envInt("SMTP_PORT", 587),

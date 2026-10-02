@@ -84,6 +84,10 @@ type SalaryInput struct {
 	BPJSKetenagakerjaan bool
 	BPJSPensiun         bool
 	OvertimeEligible    bool
+	NIK                 string
+	NPWP                string
+	BPJSKesehatanNo     string
+	BPJSKetenagakerjaNo string
 	Note                string
 	Components          []SalaryComponent
 }

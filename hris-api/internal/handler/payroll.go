@@ -56,6 +56,15 @@ func (h *PayrollHandler) Payslips(c *echo.Context) error {
 	return respond(c, v, err)
 }
 
+func (h *PayrollHandler) CreateCorrection(c *echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return httputil.Error(c, err)
+	}
+	newID, err := h.svc.CreateCorrection(c.Request().Context(), middleware.User(c), id)
+	return respond(c, map[string]int64{"id": newID}, err)
+}
+
 func (h *PayrollHandler) Settings(c *echo.Context) error {
 	v, err := h.svc.Settings(c.Request().Context(), middleware.User(c).CompanyID)
 	return respond(c, v, err)

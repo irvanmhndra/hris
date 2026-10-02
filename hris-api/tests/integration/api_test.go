@@ -415,6 +415,31 @@ func TestHRISWorkflow(t *testing.T) {
 		t.Fatalf("December must use the annual calculation: %v", decSlip)
 	}
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", december), "admin", map[string]string{"action": "void"}, 200)
+
+	// A correction run adds the difference to a locked period, including PPh 21.
+	request("POST", fmt.Sprintf("/payroll/%d/correction", december), "admin", nil, 409) // void, not finalized
+	fixRun := itemID(request("POST", fmt.Sprintf("/payroll/%d/correction", run), "admin", nil, 200))
+	request("POST", fmt.Sprintf("/payroll/%d/correction", run), "admin", nil, 409)    // one open correction
+	request("POST", "/payroll", "admin", map[string]string{"period": "2026-12"}, 409) // correction still draft
+	fix := request("GET", fmt.Sprintf("/payroll/%d/slips", fixRun), "admin", nil, 200)["data"].([]any)[0].(map[string]any)
+	if fix["net"] != float64(0) || fix["pph21"] != float64(0) || fix["run_kind"] != "correction" {
+		t.Fatalf("empty correction must change nothing: %v", fix)
+	}
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", fix["id"]), "admin", map[string]any{"version": 1, "lines": []map[string]any{
+		{"kind": "earning", "code": "ADJUSTMENT", "name": "Kekurangan bonus", "amount": 1000000, "taxable": true}}}, 200)
+	fix = request("GET", fmt.Sprintf("/payroll/%d/slips", fixRun), "admin", nil, 200)["data"].([]any)[0].(map[string]any)
+	if pph := fix["pph21"].(float64); pph <= 0 || fix["net"] != 1000000-pph {
+		t.Fatalf("correction must withhold the PPh 21 difference: %v", fix)
+	}
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", fixRun), "admin", map[string]string{"action": "finalize"}, 200)
+	if n := len(request("GET", "/payslips", "staff", nil, 200)["data"].([]any)); n != 2 {
+		t.Fatalf("employee must see the correction slip: %d", n)
+	}
+	request("PUT", "/payroll/settings", "admin", map[string]any{"jkk_rate": 24, "jp_wage_cap": 1, "kes_wage_cap": 1, "late_deduction": "per_occurrence"}, 422)
+	request("PUT", "/salaries/1", "admin", map[string]any{"basic_salary": 1, "ptkp_status": "TK/0", "tax_method": "gross", "nik": "123"}, 422)
+	calendar["carry_over_expiry_months"] = 13
+	request("PUT", "/calendar", "admin", calendar, 422)
+	calendar["carry_over_expiry_months"] = 0
 	request("GET", "/audit-logs", "staff", nil, 403)
 	if len(request("GET", "/audit-logs", "admin", nil, 200)["data"].([]any)) < 15 {
 		t.Fatal("audit trail incomplete")

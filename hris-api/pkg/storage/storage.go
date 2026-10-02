@@ -1,5 +1,5 @@
-// Package storage keeps uploaded file contents. Local disk is the only
-// backend for now; keys are opaque random names, never user input.
+// Package storage keeps uploaded file contents on local disk or an
+// S3-compatible bucket. Keys are opaque random names, never user input.
 package storage
 
 import (
@@ -19,11 +19,13 @@ type Storage interface {
 
 var validKey = regexp.MustCompile(`^[a-f0-9]{32,64}$`)
 
+var errInvalidKey = errors.New("invalid storage key")
+
 type Local struct{ Dir string }
 
 func (l Local) path(key string) (string, error) {
 	if !validKey.MatchString(key) {
-		return "", errors.New("invalid storage key")
+		return "", errInvalidKey
 	}
 	return filepath.Join(l.Dir, key[:2], key), nil
 }

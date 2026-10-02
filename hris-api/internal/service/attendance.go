@@ -226,6 +226,12 @@ func (s *AttendanceService) Summary(ctx context.Context, u *model.User, month st
 	if err != nil {
 		return nil, err
 	}
+	return summarize(src, start, end), nil
+}
+
+// summarize totals each employee's days in [start, end]: scheduled days,
+// presence, lateness, early leave, approved leave, and unexplained absence.
+func summarize(src model.ScheduleSource, start, end time.Time) []model.AttendanceSummary {
 	res := newResolver(src)
 	present := map[string]model.Attendance{}
 	for _, a := range src.Attendances {
@@ -275,7 +281,7 @@ func (s *AttendanceService) Summary(ctx context.Context, u *model.User, month st
 		}
 		v = append(v, sum)
 	}
-	return v, nil
+	return v
 }
 
 var hhmm = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)

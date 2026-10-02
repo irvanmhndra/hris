@@ -39,8 +39,9 @@ func (s *LeaveService) SaveCalendar(ctx context.Context, u *model.User, v model.
 	if v.LeaveAccrual != leavepolicy.Annual && v.LeaveAccrual != leavepolicy.Monthly {
 		return apperror.Invalid("Akrual cuti harus tahunan atau bulanan")
 	}
-	if v.CarryOverMax < 0 || v.CarryOverMax > 366 || v.LeaveEligibilityMonths < 0 || v.LeaveEligibilityMonths > 24 {
-		return apperror.Invalid("Carry-over maksimal 366 hari dan masa tunggu cuti 0–24 bulan")
+	if v.CarryOverMax < 0 || v.CarryOverMax > 366 || v.LeaveEligibilityMonths < 0 || v.LeaveEligibilityMonths > 24 ||
+		v.CarryOverExpiryMonths < 0 || v.CarryOverExpiryMonths > 12 {
+		return apperror.Invalid("Carry-over maksimal 366 hari (kedaluwarsa 0–12 bulan) dan masa tunggu cuti 0–24 bulan")
 	}
 	start, e1 := time.Parse("15:04", v.StartTime)
 	end, e2 := time.Parse("15:04", v.EndTime)
