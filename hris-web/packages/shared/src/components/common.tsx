@@ -50,6 +50,7 @@ export const kinds: Record<string, string> = {
   annual: "Cuti tahunan",
   sick: "Sakit",
   personal: "Izin pribadi",
+  unpaid: "Cuti tidak dibayar",
 };
 export function Badge({ status }: { status: string }) {
   const labels: Record<string, string> = {

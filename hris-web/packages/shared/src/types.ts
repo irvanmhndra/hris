@@ -6,6 +6,7 @@ export interface User {
   email: string;
   role: "admin" | "employee";
   company_name: string;
+  is_manager: boolean;
 }
 export interface Employee {
   id: number;
@@ -18,6 +19,7 @@ export interface Employee {
   status: "active" | "inactive";
   joined_on: string;
   left_on: string | null;
+  manager_id: number | null;
 }
 export interface Department {
   id: number;
@@ -42,7 +44,22 @@ export interface Leave {
   end_date: string;
   reason: string;
   status: string;
+  stage: "manager" | "hr";
+  review_note: string;
   days: number;
+}
+export interface TeamRequest {
+  type: "leave" | "overtime" | "corrections";
+  id: number;
+  employee_name: string;
+  kind: string;
+  start_date: string | null;
+  end_date: string | null;
+  title: string;
+  reason: string;
+  data: Record<string, string>;
+  version: number;
+  created_at: string;
 }
 export interface Dashboard {
   employees: number;
@@ -61,6 +78,7 @@ export interface HRItem {
   due_date: string;
   data: Record<string, string | number>;
   version: number;
+  stage: "manager" | "hr";
   review_note: string;
   created_at: string;
 }
@@ -69,6 +87,9 @@ export interface WorkCalendar {
   annual_allowance: number;
   start_time: string;
   end_time: string;
+  leave_accrual: "annual" | "monthly";
+  carry_over_max: number;
+  leave_eligibility_months: number;
 }
 export interface Holiday {
   id: number;
@@ -80,6 +101,8 @@ export interface Balance {
   name: string;
   year: number;
   allowance: number;
+  accrued: number;
+  carried_over: number;
   used: number;
   reserved: number;
   available: number;
@@ -172,6 +195,7 @@ export interface Payslip {
   final_period: boolean;
   worked_days: number;
   period_days: number;
+  unpaid_leave_days: number;
   taxable_gross: number;
   pph21: number;
   employer_cost: number;

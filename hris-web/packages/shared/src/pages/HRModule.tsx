@@ -147,6 +147,9 @@ function ModulePage({ module }: { module: string }) {
                     </button>
                     <Badge status={item.status} />
                   </div>
+                  {item.status === "pending" && item.stage === "manager" && (
+                    <small className="block">Menunggu persetujuan atasan</small>
+                  )}
                   <p className="record-excerpt">
                     {item.description || "Belum ada keterangan tambahan."}
                   </p>

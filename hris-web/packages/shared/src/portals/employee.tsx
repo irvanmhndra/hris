@@ -9,11 +9,13 @@ import {
   Package,
   Target,
   UserRound,
+  UsersRound,
   Wallet,
 } from "lucide-react";
 import { Route } from "react-router";
 import { HRISApp, lazyPage } from "../App";
 import type { NavItem } from "../layouts/Shell";
+import { useSession } from "../stores/session";
 const EmployeeHome = lazyPage(
   () => import("../pages/EmployeeHome"),
   "EmployeeHome",
@@ -28,6 +30,7 @@ const Calendar = lazyPage(() => import("../pages/HRSettings"), "Calendar");
 const Profiles = lazyPage(() => import("../pages/HRSettings"), "Profiles");
 const HRModule = lazyPage(() => import("../pages/HRModule"), "HRModule");
 const Payslips = lazyPage(() => import("../pages/Payslips"), "Payslips");
+const TeamApprovals = lazyPage(() => import("../pages/Team"), "TeamApprovals");
 const links: readonly NavItem[] = [
   ["/", "Beranda", LayoutDashboard],
   ["/attendance", "Kehadiran saya", Clock3],
@@ -44,9 +47,15 @@ const links: readonly NavItem[] = [
   ["/hr/goals", "Target saya", Target],
   ["/payslips", "Slip gaji", Wallet],
 ];
+const managerLinks: readonly NavItem[] = [
+  ...links.slice(0, 1),
+  ["/team", "Persetujuan tim", UsersRound],
+  ...links.slice(1),
+];
 export function EmployeeApp() {
+  const manager = useSession((s) => s.user?.is_manager);
   return (
-    <HRISApp mode="employee" links={links}>
+    <HRISApp mode="employee" links={manager ? managerLinks : links}>
       <Route path="/" element={<EmployeeHome />} />
       <Route path="/attendance" element={<Attendances employee />} />
       <Route path="/leaves" element={<Leaves employee />} />
@@ -55,6 +64,7 @@ export function EmployeeApp() {
       <Route path="/profiles" element={<Profiles />} />
       <Route path="/hr/:module" element={<HRModule />} />
       <Route path="/payslips" element={<Payslips />} />
+      <Route path="/team" element={<TeamApprovals />} />
     </HRISApp>
   );
 }

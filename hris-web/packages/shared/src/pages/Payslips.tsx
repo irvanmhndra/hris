@@ -81,6 +81,8 @@ export function SlipModal({
           {slip.tax_method === "none" && " · PPh 21 dihitung manual"}
           {slip.worked_days < slip.period_days &&
             ` · ${slip.worked_days} dari ${slip.period_days} hari kerja`}
+          {slip.unpaid_leave_days > 0 &&
+            ` · ${slip.unpaid_leave_days} hari cuti tidak dibayar`}
           {slip.final_period && " · PPh 21 perhitungan tahunan"}
         </p>
         <SlipSection

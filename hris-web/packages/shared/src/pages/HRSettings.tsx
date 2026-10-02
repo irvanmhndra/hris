@@ -182,6 +182,11 @@ function CalendarForm({
             annual_allowance: Number(data.get("annual_allowance")),
             start_time: data.get("start_time"),
             end_time: data.get("end_time"),
+            leave_accrual: data.get("leave_accrual"),
+            carry_over_max: Number(data.get("carry_over_max")),
+            leave_eligibility_months: Number(
+              data.get("leave_eligibility_months"),
+            ),
           });
         }}
       >
@@ -232,12 +237,48 @@ function CalendarForm({
               disabled={!admin}
             />
           </label>
+          <label>
+            Akrual cuti tahunan
+            <select
+              name="leave_accrual"
+              defaultValue={calendar.leave_accrual}
+              disabled={!admin}
+            >
+              <option value="annual">Penuh di awal tahun</option>
+              <option value="monthly">Bulanan (1/12 per bulan)</option>
+            </select>
+          </label>
+          <label>
+            Maks. carry-over ke tahun berikutnya (hari)
+            <input
+              type="number"
+              name="carry_over_max"
+              min={0}
+              max={366}
+              defaultValue={calendar.carry_over_max}
+              required
+              disabled={!admin}
+            />
+          </label>
+          <label>
+            Masa kerja sebelum berhak cuti (bulan)
+            <input
+              type="number"
+              name="leave_eligibility_months"
+              min={0}
+              max={24}
+              defaultValue={calendar.leave_eligibility_months}
+              required
+              disabled={!admin}
+            />
+          </label>
         </div>
         <p className="form-hint">
           Kuota default digunakan sampai ada alokasi tersimpan untuk
           karyawan/tahun tersebut. Alokasi yang telah tersimpan dikelola di
-          Saldo cuti. Jam kerja ini informasi jadwal umum; belum menghitung
-          keterlambatan atau shift.
+          Saldo cuti. Akrual bulanan menghitung hak sampai bulan cuti diambil.
+          Carry-over hanya membawa sisa hak tahun sebelumnya (0 = hangus). UU
+          Ketenagakerjaan mensyaratkan 12 bulan masa kerja untuk cuti tahunan.
         </p>
         <ErrorBox error={m.error} />
         {admin && (
@@ -263,7 +304,8 @@ export function BalanceSummary() {
         <div className="balance-cards">
           {[
             ["Tersedia", b.available],
-            ["Kuota tahunan", b.allowance],
+            ["Hak berjalan", b.accrued],
+            ["Carry-over", b.carried_over],
             ["Terpakai", b.used],
             ["Dicadangkan", b.reserved],
           ].map(([label, value]) => (
@@ -327,6 +369,8 @@ export function Balances() {
                 <tr>
                   <th>KARYAWAN</th>
                   <th>KUOTA</th>
+                  <th>HAK BERJALAN</th>
+                  <th>CARRY-OVER</th>
                   <th>TERPAKAI</th>
                   <th>DICADANGKAN</th>
                   <th>TERSEDIA</th>
@@ -338,6 +382,8 @@ export function Balances() {
                   <tr key={b.employee_id}>
                     <td>{b.name}</td>
                     <td>{b.allowance} hari</td>
+                    <td>{b.accrued} hari</td>
+                    <td>{b.carried_over} hari</td>
                     <td>{b.used} hari</td>
                     <td>{b.reserved} hari</td>
                     <td>

@@ -144,6 +144,16 @@ export function Leaves({ employee }: { employee: boolean }) {
                     <td className="reason">{l.reason}</td>
                     <td>
                       <Badge status={l.status} />
+                      {l.status === "pending" && (
+                        <small className="block">
+                          {l.stage === "manager"
+                            ? "Menunggu atasan"
+                            : "Menunggu HR"}
+                        </small>
+                      )}
+                      {l.status === "rejected" && l.review_note && (
+                        <small className="block">{l.review_note}</small>
+                      )}
                     </td>
                     {employee && (
                       <td>
@@ -244,7 +254,9 @@ export function Leaves({ employee }: { employee: boolean }) {
             <p className="form-hint">
               Durasi mengikuti hari kerja dan kalender libur perusahaan. Cuti
               tahunan yang diajukan mencadangkan saldo sampai disetujui,
-              ditolak, atau dibatalkan.
+              ditolak, atau dibatalkan. Cuti tidak dibayar tidak memakai saldo
+              dan mengurangi gaji sesuai hari kerja. Bila Anda memiliki atasan,
+              pengajuan disetujui atasan terlebih dahulu, lalu HR.
             </p>
             <ErrorBox error={create.error} />
             <div className="modal-actions">

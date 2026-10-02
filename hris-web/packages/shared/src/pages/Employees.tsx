@@ -27,6 +27,7 @@ function EmployeeForm({
   close: () => void;
 }) {
   const depts = useData<Department[]>("/departments");
+  const people = useData<Employee[]>("/employees");
   const [status, setStatus] = useState(employee?.status || "active");
   const qc = useQueryClient();
   const m = useMutation({
@@ -44,7 +45,11 @@ function EmployeeForm({
   function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.currentTarget));
-    m.mutate({ ...data, department_id: Number(data.department_id) });
+    m.mutate({
+      ...data,
+      department_id: Number(data.department_id),
+      manager_id: data.manager_id ? Number(data.manager_id) : null,
+    });
   }
   return (
     <Modal title={employee ? "Edit karyawan" : "Tambah karyawan"} close={close}>
@@ -103,6 +108,23 @@ function EmployeeForm({
               required
               maxLength={120}
             />
+          </label>
+          <label>
+            Atasan langsung
+            <select
+              name="manager_id"
+              key={people.data ? "ready" : "loading"}
+              defaultValue={employee?.manager_id || ""}
+            >
+              <option value="">Tanpa atasan (langsung HR)</option>
+              {people.data
+                ?.filter((p) => p.id !== employee?.id && p.status === "active")
+                .map((p) => (
+                  <option value={p.id} key={p.id}>
+                    {p.name} · {p.position}
+                  </option>
+                ))}
+            </select>
           </label>
           <label>
             Tanggal bergabung
