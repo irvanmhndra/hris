@@ -298,6 +298,41 @@ func TestHRISWorkflow(t *testing.T) {
 		t.Fatal("approved correction not applied")
 	}
 
+	// Shifts, per-date schedules, geofenced check-in, and the monthly summary.
+	request("POST", "/shifts", "admin", map[string]any{"name": "Pagi", "start_time": "25:00", "end_time": "17:00"}, 422)
+	request("POST", "/shifts", "staff", map[string]any{"name": "Pagi", "start_time": "08:00", "end_time": "17:00"}, 403)
+	pagi := itemID(request("POST", "/shifts", "admin", map[string]any{"name": "Pagi", "start_time": "08:00", "end_time": "17:00", "grace_minutes": 10}, 200))
+	request("PUT", "/schedule", "admin", map[string]any{"employee_ids": []int{2}, "from": "2026-03-07", "to": "2026-03-07", "shift_id": pagi}, 404)
+	request("PUT", "/schedule", "admin", map[string]any{"employee_ids": []int{1}, "from": "2026-03-07", "to": "2026-03-07", "shift_id": pagi}, 200)
+	week := request("GET", "/schedule?from=2026-03-06&to=2026-03-08", "admin", nil, 200)["data"].([]any)
+	for _, row := range week {
+		r := row.(map[string]any)
+		if r["employee_id"] != float64(1) {
+			continue
+		}
+		days := r["days"].([]any)
+		fri, sat, sun := days[0].(map[string]any), days[1].(map[string]any), days[2].(map[string]any)
+		if fri["shift_name"] != "Jam kantor" || sat["shift_name"] != "Pagi" || sat["assigned"] != true || sun["off"] != true {
+			t.Fatalf("schedule resolution wrong: %v", days)
+		}
+	}
+	request("POST", "/attendance-locations", "admin", map[string]any{"name": "HQ", "latitude": -6.2, "longitude": 106.8, "radius_m": 5}, 422)
+	request("POST", "/attendance-locations", "admin", map[string]any{"name": "HQ", "latitude": -6.2, "longitude": 106.8, "radius_m": 100}, 200)
+	calendar["require_location"] = true
+	request("PUT", "/calendar", "admin", calendar, 200)
+	request("POST", "/attendance/in", "staff", nil, 422)
+	request("POST", "/attendance/in", "staff", map[string]float64{"latitude": -6.3, "longitude": 106.8}, 422)
+	request("POST", "/attendance/in", "staff", map[string]float64{"latitude": -6.2003, "longitude": 106.8}, 409) // inside; already checked in today
+	calendar["require_location"] = false
+	request("PUT", "/calendar", "admin", calendar, 200)
+	if request("GET", "/attendance/today", "staff", nil, 200)["data"].(map[string]any)["locations"] != float64(1) {
+		t.Fatal("today view must report locations")
+	}
+	summary := request("GET", "/attendance-summary?month="+time.Now().Format("2006-01"), "admin", nil, 200)["data"].([]any)
+	if len(summary) != 2 || summary[0].(map[string]any)["present_days"] != float64(1) {
+		t.Fatalf("attendance summary wrong: %v", summary)
+	}
+
 	// Payroll calculation, snapshots, locking, per-employee confidentiality, and manual payment lifecycle.
 	request("GET", "/salaries", "staff", nil, 403)
 	request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 409)

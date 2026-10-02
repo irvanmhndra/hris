@@ -128,10 +128,9 @@ func ValidateHRItem(module string, v *dto.HRItem) error {
 		data.StartAt = start.UTC().Format(time.RFC3339)
 		data.EndAt = end.UTC().Format(time.RFC3339)
 	case "corrections":
-		in, e1 := time.Parse(time.RFC3339, data.Date+"T"+data.CheckIn+":00+07:00")
-		out, e2 := time.Parse(time.RFC3339, data.Date+"T"+data.CheckOut+":00+07:00")
-		if e1 != nil || e2 != nil || !out.After(in) || out.After(time.Now()) {
-			return apperror.Invalid("Koreksi harus berisi jam masuk/pulang di hari yang sama, urut, dan tidak di masa depan")
+		_, out, err := CorrectionWindow(data.Date, data.CheckIn, data.CheckOut)
+		if err != nil || out.After(time.Now()) {
+			return apperror.Invalid("Koreksi harus berisi jam masuk/pulang valid (pulang sebelum masuk berarti keesokan hari, maks. 20 jam) dan tidak di masa depan")
 		}
 		data.Original = "" // set server-side from the live attendance row
 	}
@@ -207,4 +206,22 @@ func (s *HRItemService) ActHRItem(ctx context.Context, u *model.User, module str
 	return s.repo.ActHRItem(ctx, u.CompanyID, u.ID, module, id, itemScope(u, module), model.HRActionInput{
 		Action: v.Action, Note: v.Note, Progress: v.Progress, Version: v.Version,
 	})
+}
+
+// CorrectionWindow turns a correction's date and HH:MM times into instants.
+// A check-out at or before the check-in is on the next day (overnight shift);
+// a shift may last at most 20 hours.
+func CorrectionWindow(date, checkIn, checkOut string) (time.Time, time.Time, error) {
+	in, e1 := time.Parse(time.RFC3339, date+"T"+checkIn+":00+07:00")
+	out, e2 := time.Parse(time.RFC3339, date+"T"+checkOut+":00+07:00")
+	if e1 != nil || e2 != nil {
+		return in, out, apperror.Invalid("Jam koreksi tidak valid")
+	}
+	if !out.After(in) {
+		out = out.AddDate(0, 0, 1)
+	}
+	if out.Sub(in) > 20*time.Hour {
+		return in, out, apperror.Invalid("Durasi kerja maksimal 20 jam")
+	}
+	return in, out, nil
 }

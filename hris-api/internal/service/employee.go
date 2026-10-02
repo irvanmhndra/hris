@@ -84,6 +84,9 @@ func ValidateEmployee(v *dto.Employee, create bool) error {
 	if v.ManagerID != nil && *v.ManagerID <= 0 {
 		v.ManagerID = nil
 	}
+	if v.ShiftID != nil && *v.ShiftID <= 0 {
+		v.ShiftID = nil
+	}
 	if v.Status == "active" {
 		v.LeftOn = ""
 	} else if v.LeftOn != "" {
@@ -105,7 +108,7 @@ func (s *EmployeeService) SaveEmployee(ctx context.Context, companyID, id int64,
 	}
 	in := model.EmployeeInput{
 		Code: v.Code, Name: v.Name, Email: v.Email, DepartmentID: v.DepartmentID,
-		Position: v.Position, Status: v.Status, JoinedOn: v.JoinedOn, LeftOn: v.LeftOn, ManagerID: v.ManagerID,
+		Position: v.Position, Status: v.Status, JoinedOn: v.JoinedOn, LeftOn: v.LeftOn, ManagerID: v.ManagerID, ShiftID: v.ShiftID,
 	}
 	if v.Password != "" {
 		h, err := bcrypt.GenerateFromPassword([]byte(v.Password), bcrypt.DefaultCost)

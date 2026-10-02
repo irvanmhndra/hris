@@ -18,6 +18,7 @@ type EmployeeInput struct {
 	// stored date (or today on deactivation).
 	LeftOn    string
 	ManagerID *int64
+	ShiftID   *int64
 	// PasswordHash is empty when the password is unchanged.
 	PasswordHash string
 }

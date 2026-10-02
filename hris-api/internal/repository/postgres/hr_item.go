@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/repository"
@@ -175,6 +176,10 @@ func (r *hrItemRepository) ActHRItem(ctx context.Context, companyID, actorID int
 		}
 		status = map[string]string{"approve": "approved", "reject": "rejected", "cancel": "cancelled"}[v.Action]
 		if module == "corrections" && v.Action == "approve" {
+			in, out, err := correctionWindow(data.Date, data.CheckIn, data.CheckOut)
+			if err != nil {
+				return err
+			}
 			current, err := attendanceFingerprint(ctx, tx, companyID, employeeID, data.Date)
 			if err != nil {
 				return err
@@ -186,9 +191,7 @@ func (r *hrItemRepository) ActHRItem(ctx context.Context, companyID, actorID int
 				INSERT INTO attendances (company_id, employee_id, date, check_in, check_out)
 				VALUES ($1, $2, $3, $4, $5)
 				ON CONFLICT (company_id, employee_id, date) DO UPDATE SET check_in = $4, check_out = $5`,
-				companyID, employeeID, data.Date,
-				data.Date+"T"+data.CheckIn+":00+07:00",
-				data.Date+"T"+data.CheckOut+":00+07:00")
+				companyID, employeeID, data.Date, in, out)
 			if err != nil {
 				return err
 			}
@@ -226,4 +229,18 @@ func (r *hrItemRepository) ActHRItem(ctx context.Context, companyID, actorID int
 		return err
 	}
 	return tx.Commit()
+}
+
+// correctionWindow mirrors service.CorrectionWindow: a check-out at or before
+// the check-in falls on the next day.
+func correctionWindow(date, checkIn, checkOut string) (time.Time, time.Time, error) {
+	in, err := time.Parse(time.RFC3339, date+"T"+checkIn+":00+07:00")
+	if err != nil {
+		return in, in, err
+	}
+	out, err := time.Parse(time.RFC3339, date+"T"+checkOut+":00+07:00")
+	if err == nil && !out.After(in) {
+		out = out.AddDate(0, 0, 1)
+	}
+	return in, out, err
 }

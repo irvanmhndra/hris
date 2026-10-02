@@ -30,7 +30,8 @@ func workCalendar(ctx context.Context, q sqlx.QueryerContext, companyID int64) (
 	v := model.WorkCalendar{Workdays: pq.Int64Array{1, 2, 3, 4, 5}, AnnualAllowance: 12, StartTime: "09:00", EndTime: "18:00",
 		LeaveAccrual: leavepolicy.Annual}
 	err := sqlx.GetContext(ctx, q, &v, `
-		SELECT workdays, annual_allowance, start_time, end_time, leave_accrual, carry_over_max, leave_eligibility_months
+		SELECT workdays, annual_allowance, start_time, end_time, leave_accrual, carry_over_max, leave_eligibility_months,
+		       require_location
 		FROM work_calendars WHERE company_id = $1`,
 		companyID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -66,13 +67,13 @@ func (r *leaveRepository) SaveCalendar(ctx context.Context, companyID, actorID i
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO work_calendars (company_id, workdays, annual_allowance, start_time, end_time,
-		                            leave_accrual, carry_over_max, leave_eligibility_months)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		                            leave_accrual, carry_over_max, leave_eligibility_months, require_location)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (company_id) DO UPDATE
 		SET workdays = $2, annual_allowance = $3, start_time = $4, end_time = $5,
-		    leave_accrual = $6, carry_over_max = $7, leave_eligibility_months = $8`,
+		    leave_accrual = $6, carry_over_max = $7, leave_eligibility_months = $8, require_location = $9`,
 		companyID, v.Workdays, v.AnnualAllowance, v.StartTime, v.EndTime,
-		v.LeaveAccrual, v.CarryOverMax, v.LeaveEligibilityMonths)
+		v.LeaveAccrual, v.CarryOverMax, v.LeaveEligibilityMonths, v.RequireLocation)
 	if err != nil {
 		return err
 	}

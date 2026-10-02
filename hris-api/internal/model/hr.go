@@ -17,6 +17,8 @@ type WorkCalendar struct {
 	LeaveAccrual           string `db:"leave_accrual" json:"leave_accrual"`
 	CarryOverMax           int    `db:"carry_over_max" json:"carry_over_max"`
 	LeaveEligibilityMonths int    `db:"leave_eligibility_months" json:"leave_eligibility_months"`
+	// RequireLocation rejects check-in/out outside every attendance location.
+	RequireLocation bool `db:"require_location" json:"require_location"`
 }
 type Holiday struct {
 	ID   int64  `db:"id" json:"id"`

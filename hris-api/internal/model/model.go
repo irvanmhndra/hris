@@ -40,6 +40,7 @@ type Employee struct {
 	JoinedOn     string  `db:"joined_on" json:"joined_on"`
 	LeftOn       *string `db:"left_on" json:"left_on"`
 	ManagerID    *int64  `db:"manager_id" json:"manager_id"`
+	ShiftID      *int64  `db:"shift_id" json:"shift_id"`
 }
 type Attendance struct {
 	ID         int64      `db:"id" json:"id"`
@@ -48,6 +49,14 @@ type Attendance struct {
 	Date       string     `db:"date" json:"date"`
 	CheckIn    time.Time  `db:"check_in" json:"check_in"`
 	CheckOut   *time.Time `db:"check_out" json:"check_out"`
+	// Schedule snapshot taken at check-in, and the measured deviations.
+	ShiftName         string     `db:"shift_name" json:"shift_name"`
+	ScheduledStart    *time.Time `db:"scheduled_start" json:"scheduled_start"`
+	ScheduledEnd      *time.Time `db:"scheduled_end" json:"scheduled_end"`
+	LateMinutes       int        `db:"late_minutes" json:"late_minutes"`
+	EarlyLeaveMinutes int        `db:"early_leave_minutes" json:"early_leave_minutes"`
+	CheckInDistanceM  *int       `db:"check_in_distance_m" json:"check_in_distance_m"`
+	CheckOutDistanceM *int       `db:"check_out_distance_m" json:"check_out_distance_m"`
 }
 type Leave struct {
 	Calculation string `db:"calculation" json:"calculation"`

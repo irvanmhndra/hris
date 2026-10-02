@@ -15,6 +15,7 @@ type Employee struct {
 	JoinedOn     string `json:"joined_on"`
 	LeftOn       string `json:"left_on"`
 	ManagerID    *int64 `json:"manager_id"`
+	ShiftID      *int64 `json:"shift_id"`
 	Password     string `json:"password"`
 }
 
@@ -23,6 +24,22 @@ type TeamReview struct {
 	Action  string `json:"action"`
 	Note    string `json:"note"`
 	Version int    `json:"version"`
+}
+
+// Clock carries the browser's position for geofenced check-in/out.
+type Clock struct {
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+}
+
+// ShiftAssignments sets (or clears) a date range of shifts for employees.
+// A nil ShiftID with Clear false records days off.
+type ShiftAssignments struct {
+	EmployeeIDs []int64 `json:"employee_ids"`
+	From        string  `json:"from"`
+	To          string  `json:"to"`
+	ShiftID     *int64  `json:"shift_id"`
+	Clear       bool    `json:"clear"`
 }
 
 // EmployeeQuery filters the employee list. Page 0 returns every match

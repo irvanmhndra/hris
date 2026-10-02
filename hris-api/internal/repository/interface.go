@@ -32,7 +32,14 @@ type EmployeeRepository interface {
 
 type AttendanceRepository interface {
 	Attendances(ctx context.Context, companyID int64, employeeID *int64) ([]model.Attendance, error)
-	Clock(ctx context.Context, companyID, employeeID int64, out bool) error
+	Clock(ctx context.Context, companyID, employeeID int64, v model.ClockInput) error
+	ScheduleSource(ctx context.Context, companyID int64, employeeID *int64, from, to string, withRecords bool) (model.ScheduleSource, error)
+	Shifts(ctx context.Context, companyID int64) ([]model.Shift, error)
+	SaveShift(ctx context.Context, companyID, actorID, id int64, v model.Shift) (int64, error)
+	SetAssignments(ctx context.Context, companyID, actorID int64, employeeIDs []int64, from, to string, shiftID *int64, clear bool) error
+	Locations(ctx context.Context, companyID int64) ([]model.AttendanceLocation, error)
+	SaveLocation(ctx context.Context, companyID, actorID, id int64, v model.AttendanceLocation) (int64, error)
+	DeleteLocation(ctx context.Context, companyID, actorID, id int64) error
 }
 
 type LeaveRepository interface {
