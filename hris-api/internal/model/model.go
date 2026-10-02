@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	RoleAdmin    = "admin"
@@ -16,6 +19,8 @@ type User struct {
 	Role         string `db:"role" json:"role"`
 	PasswordHash string `db:"password_hash" json:"-"`
 	CompanyName  string `db:"company_name" json:"company_name"`
+	// IsManager is true when active employees report to this user.
+	IsManager bool `db:"is_manager" json:"is_manager"`
 }
 type Department struct {
 	ID    int64  `db:"id" json:"id"`
@@ -34,6 +39,7 @@ type Employee struct {
 	Status       string  `db:"status" json:"status"`
 	JoinedOn     string  `db:"joined_on" json:"joined_on"`
 	LeftOn       *string `db:"left_on" json:"left_on"`
+	ManagerID    *int64  `db:"manager_id" json:"manager_id"`
 }
 type Attendance struct {
 	ID         int64      `db:"id" json:"id"`
@@ -53,7 +59,25 @@ type Leave struct {
 	EndDate     string `db:"end_date" json:"end_date"`
 	Reason      string `db:"reason" json:"reason"`
 	Status      string `db:"status" json:"status"`
+	Stage       string `db:"stage" json:"stage"`
+	ReviewNote  string `db:"review_note" json:"review_note"`
 	Days        int    `db:"days" json:"days"`
+}
+
+// TeamRequest is a pending request waiting for the caller's decision as the
+// requester's direct manager: a leave, overtime, or attendance correction.
+type TeamRequest struct {
+	Type         string          `db:"type" json:"type"`
+	ID           int64           `db:"id" json:"id"`
+	EmployeeName string          `db:"employee_name" json:"employee_name"`
+	Kind         string          `db:"kind" json:"kind"`
+	StartDate    *string         `db:"start_date" json:"start_date"`
+	EndDate      *string         `db:"end_date" json:"end_date"`
+	Title        string          `db:"title" json:"title"`
+	Reason       string          `db:"reason" json:"reason"`
+	Data         json.RawMessage `db:"data" json:"data"`
+	Version      int             `db:"version" json:"version"`
+	CreatedAt    time.Time       `db:"created_at" json:"created_at"`
 }
 type Dashboard struct {
 	Employees   int `db:"employees" json:"employees"`

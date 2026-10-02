@@ -188,6 +188,64 @@ func TestHRISWorkflow(t *testing.T) {
 	request("PUT", "/leave-balances/1", "admin", map[string]int{"year": 2027, "allowance": 0}, 200)
 	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2026-12-31", "end_date": "2027-01-04", "reason": "Cross-year balance"}, 409)
 
+	// Monthly accrual counts entitlement up to the leave month; carry-over brings unused days forward.
+	calendar["leave_accrual"] = "monthly"
+	calendar["carry_over_max"] = 5
+	request("PUT", "/calendar", "admin", calendar, 200)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2028-02-01", "end_date": "2028-02-02", "reason": "Accrual not enough"}, 409)
+	request("POST", "/leaves", "staff", map[string]string{"kind": "annual", "start_date": "2028-02-01", "end_date": "2028-02-01", "reason": "Accrued one day"}, 200)
+	next := request("GET", "/leave-balances?year=2029", "staff", nil, 200)["data"].([]any)[0].(map[string]any)
+	if next["carried_over"] != float64(5) || next["accrued"] != float64(8) {
+		t.Fatalf("carry-over/accrual wrong: %v", next)
+	}
+	for _, l := range request("GET", "/leaves", "staff", nil, 200)["data"].([]any) {
+		if row := l.(map[string]any); row["start_date"] == "2028-02-01" {
+			request("POST", fmt.Sprintf("/leaves/%.0f/cancel", row["id"]), "staff", nil, 200)
+		}
+	}
+	calendar["leave_accrual"] = "weekly"
+	request("PUT", "/calendar", "admin", calendar, 422)
+	calendar["leave_accrual"] = "annual"
+	calendar["carry_over_max"] = 0
+	request("PUT", "/calendar", "admin", calendar, 200)
+
+	// Two-step approval: the direct manager forwards to HR or rejects; HR decides last.
+	staffEmployee := map[string]any{"name": "Employee A", "email": "staff@alpha.test", "code": "A1", "department_id": 1, "position": "Engineer", "status": "active", "joined_on": "2025-01-01", "manager_id": created}
+	request("PUT", "/employees/1", "admin", staffEmployee, 200)
+	employee["email"] = "changed@alpha.test"
+	employee["manager_id"] = 1
+	request("PUT", fmt.Sprintf("/employees/%.0f", created), "admin", employee, 422)
+	delete(employee, "manager_id")
+	var managerUser int64
+	if err = isolated.Get(&managerUser, `SELECT id FROM users WHERE employee_id=$1`, created); err != nil {
+		t.Fatal(err)
+	}
+	session(managerUser, "manager")
+	if request("GET", "/auth/me", "manager", nil, 200)["data"].(map[string]any)["is_manager"] != true {
+		t.Fatal("manager flag missing")
+	}
+	// Unpaid leave skips the annual balance (fully used) and reduces December pay.
+	request("POST", "/leaves", "staff", map[string]string{"kind": "unpaid", "start_date": "2026-12-02", "end_date": "2026-12-03", "reason": "Personal matters"}, 200)
+	if len(request("GET", "/team/approvals", "staff", nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("non-manager sees team approvals")
+	}
+	team := request("GET", "/team/approvals", "manager", nil, 200)["data"].([]any)
+	if len(team) != 1 || team[0].(map[string]any)["kind"] != "unpaid" {
+		t.Fatalf("manager queue wrong: %v", team)
+	}
+	unpaidID := team[0].(map[string]any)["id"].(float64)
+	reviewPath := fmt.Sprintf("/team/approvals/leave/%.0f", unpaidID)
+	request("POST", reviewPath, "manager", map[string]string{"action": "reject"}, 422)
+	request("POST", reviewPath, "other", map[string]string{"action": "approve"}, 403)
+	request("POST", reviewPath, "manager", map[string]string{"action": "approve"}, 200)
+	request("POST", reviewPath, "manager", map[string]string{"action": "approve"}, 404)
+	for _, l := range request("GET", "/leaves", "admin", nil, 200)["data"].([]any) {
+		if row := l.(map[string]any); row["id"] == unpaidID && (row["stage"] != "hr" || row["status"] != "pending") {
+			t.Fatalf("manager approval must forward to HR: %v", row)
+		}
+	}
+	request("PATCH", fmt.Sprintf("/leaves/%.0f", unpaidID), "admin", map[string]string{"status": "approved"}, 200)
+
 	// Self-service profiles cannot mutate identity or another tenant.
 	request("PUT", "/profile", "staff", map[string]any{"phone": "0812345678", "name": "Injected Name", "employee_id": 2}, 200)
 	profile := request("GET", "/profile", "staff", nil, 200)["data"].(map[string]any)
@@ -316,7 +374,8 @@ func TestHRISWorkflow(t *testing.T) {
 			t.Fatal("overtime paid twice")
 		}
 	}
-	if decSlip["final_period"] != true || decSlip["pph21"] == float64(0) {
+	if decSlip["final_period"] != true || decSlip["pph21"] == float64(0) || decSlip["unpaid_leave_days"] != float64(2) ||
+		decSlip["worked_days"].(float64) != decSlip["period_days"].(float64)-2 {
 		t.Fatalf("December must use the annual calculation: %v", decSlip)
 	}
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", december), "admin", map[string]string{"action": "void"}, 200)

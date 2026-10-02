@@ -166,7 +166,18 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 				to, final = left, true
 			}
 		}
-		worked := cal.Workdays(from, to)
+		// Approved unpaid leave on scheduled working days is not paid.
+		unpaid := 0
+		for _, day := range emp.UnpaidLeave {
+			dt, err := time.Parse(time.DateOnly, day)
+			if err != nil {
+				return nil, err
+			}
+			if !dt.Before(from) && !dt.After(to) && cal.IsWorkday(dt) {
+				unpaid++
+			}
+		}
+		worked := max(cal.Workdays(from, to)-unpaid, 0)
 		sal := emp.Salary
 
 		// Fixed monthly wage (basic + fixed allowances) is the base for
@@ -228,7 +239,7 @@ func BuildPayroll(src model.PayrollSource, start time.Time, thrDate *time.Time) 
 			EmployeeID: emp.ID, Name: emp.Name, Code: emp.Code, Position: emp.Position,
 			PTKPStatus: sal.PTKPStatus, TaxMethod: sal.TaxMethod, BPJSKesehatan: sal.BPJSKesehatan,
 			BPJSKetenagakerjaan: sal.BPJSKetenagakerjaan, BPJSPensiun: sal.BPJSPensiun,
-			FinalPeriod: final, WorkedDays: worked, PeriodDays: periodDays, Note: sal.Note,
+			FinalPeriod: final, WorkedDays: worked, PeriodDays: periodDays, UnpaidLeaveDays: unpaid, Note: sal.Note,
 			OvertimeIDs: overtimeIDs,
 		}
 		if err := calculate(&d, append(lines, deductions...), settingsOf(src.Settings), ytdOf(emp.YTD)); err != nil {

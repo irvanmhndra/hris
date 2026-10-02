@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/irvanmhndra/hris-api/internal/leavepolicy"
 	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/repository"
 	"github.com/irvanmhndra/hris-api/pkg/apperror"
@@ -21,15 +23,24 @@ func NewLeaveRepository(db *sqlx.DB) repository.LeaveRepository {
 
 func (r *leaveRepository) WorkCalendar(ctx context.Context, companyID int64) (model.WorkCalendar, error) {
 	// Defaults apply until the company saves its own calendar.
-	v := model.WorkCalendar{Workdays: pq.Int64Array{1, 2, 3, 4, 5}, AnnualAllowance: 12, StartTime: "09:00", EndTime: "18:00"}
-	err := r.db.GetContext(ctx, &v, `
-		SELECT workdays, annual_allowance, start_time, end_time
+	return workCalendar(ctx, r.db, companyID)
+}
+
+func workCalendar(ctx context.Context, q sqlx.QueryerContext, companyID int64) (model.WorkCalendar, error) {
+	v := model.WorkCalendar{Workdays: pq.Int64Array{1, 2, 3, 4, 5}, AnnualAllowance: 12, StartTime: "09:00", EndTime: "18:00",
+		LeaveAccrual: leavepolicy.Annual}
+	err := sqlx.GetContext(ctx, q, &v, `
+		SELECT workdays, annual_allowance, start_time, end_time, leave_accrual, carry_over_max, leave_eligibility_months
 		FROM work_calendars WHERE company_id = $1`,
 		companyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
 	return v, err
+}
+
+func leavePolicy(c model.WorkCalendar) leavepolicy.Policy {
+	return leavepolicy.Policy{Accrual: c.LeaveAccrual, CarryOverMax: c.CarryOverMax, EligibilityMonths: c.LeaveEligibilityMonths}
 }
 
 func (r *leaveRepository) SaveCalendar(ctx context.Context, companyID, actorID int64, v model.WorkCalendar) error {
@@ -54,11 +65,14 @@ func (r *leaveRepository) SaveCalendar(ctx context.Context, companyID, actorID i
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO work_calendars (company_id, workdays, annual_allowance, start_time, end_time)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO work_calendars (company_id, workdays, annual_allowance, start_time, end_time,
+		                            leave_accrual, carry_over_max, leave_eligibility_months)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (company_id) DO UPDATE
-		SET workdays = $2, annual_allowance = $3, start_time = $4, end_time = $5`,
-		companyID, v.Workdays, v.AnnualAllowance, v.StartTime, v.EndTime)
+		SET workdays = $2, annual_allowance = $3, start_time = $4, end_time = $5,
+		    leave_accrual = $6, carry_over_max = $7, leave_eligibility_months = $8`,
+		companyID, v.Workdays, v.AnnualAllowance, v.StartTime, v.EndTime,
+		v.LeaveAccrual, v.CarryOverMax, v.LeaveEligibilityMonths)
 	if err != nil {
 		return err
 	}
@@ -115,34 +129,70 @@ func (r *leaveRepository) DeleteHoliday(ctx context.Context, companyID, actorID,
 	return tx.Commit()
 }
 
-// balancesSQL computes annual-leave balances: allowance (per-employee
-// allocation, else the company default, else 12) minus approved days (used)
-// minus pending days (reserved). Parameters: company, employee (nullable), year.
+// balancesSQL loads the raw annual-leave figures of a year: allowance
+// (per-employee allocation, else the company default, else 12), approved
+// (used) and pending (reserved) days, and the previous year's allowance and
+// usage for carry-over. Parameters: company, employee (nullable), year.
 const balancesSQL = `
-	WITH totals AS (
-		SELECT e.id employee_id, e.name, $3::integer AS "year",
-		       COALESCE(a.allowance, w.annual_allowance, 12) allowance,
-		       (SELECT count(*)
-		        FROM leave_days d
-		        JOIN leave_requests l ON l.id = d.leave_id AND l.company_id = d.company_id
-		        WHERE l.company_id = e.company_id AND l.employee_id = e.id AND l.kind = 'annual'
-		          AND l.status = 'approved' AND EXTRACT(year FROM d.date) = $3) used,
-		       (SELECT count(*)
-		        FROM leave_days d
-		        JOIN leave_requests l ON l.id = d.leave_id AND l.company_id = d.company_id
-		        WHERE l.company_id = e.company_id AND l.employee_id = e.id AND l.kind = 'annual'
-		          AND l.status = 'pending' AND EXTRACT(year FROM d.date) = $3) reserved
-		FROM employees e
-		LEFT JOIN work_calendars w ON w.company_id = e.company_id
-		LEFT JOIN leave_allocations a ON a.company_id = e.company_id AND a.employee_id = e.id AND a.year = $3
-		WHERE e.company_id = $1 AND ($2::bigint IS NULL OR e.id = $2)
-	)
-	SELECT *, allowance - used - reserved available FROM totals ORDER BY name`
+	SELECT e.id employee_id, e.name, e.joined_on::text joined_on, $3::integer AS "year",
+	       COALESCE(a.allowance, w.annual_allowance, 12) allowance,
+	       COALESCE(pa.allowance, w.annual_allowance, 12) prev_allowance,
+	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3) used,
+	       count(d.date) FILTER (WHERE l.status = 'pending' AND EXTRACT(year FROM d.date) = $3) reserved,
+	       count(d.date) FILTER (WHERE l.status = 'approved' AND EXTRACT(year FROM d.date) = $3 - 1) prev_used
+	FROM employees e
+	LEFT JOIN work_calendars w ON w.company_id = e.company_id
+	LEFT JOIN leave_allocations a ON a.company_id = e.company_id AND a.employee_id = e.id AND a.year = $3
+	LEFT JOIN leave_allocations pa ON pa.company_id = e.company_id AND pa.employee_id = e.id AND pa.year = $3 - 1
+	LEFT JOIN leave_requests l ON l.company_id = e.company_id AND l.employee_id = e.id AND l.kind = 'annual'
+	LEFT JOIN leave_days d ON d.company_id = l.company_id AND d.leave_id = l.id
+	WHERE e.company_id = $1 AND ($2::bigint IS NULL OR e.id = $2)
+	GROUP BY e.id, a.allowance, pa.allowance, w.annual_allowance
+	ORDER BY e.name`
+
+// balances computes entitlement under the company policy. asOf picks the date
+// accrual is counted to for each balance's year.
+func balances(ctx context.Context, q sqlx.QueryerContext, companyID int64, employeeID *int64, year int,
+	asOf func(year int) time.Time) ([]model.Balance, error) {
+	cal, err := workCalendar(ctx, q, companyID)
+	if err != nil {
+		return nil, err
+	}
+	p := leavePolicy(cal)
+	v := []model.Balance{}
+	if err = sqlx.SelectContext(ctx, q, &v, balancesSQL, companyID, employeeID, year); err != nil {
+		return nil, err
+	}
+	for i := range v {
+		b := &v[i]
+		joined, err := time.Parse(time.DateOnly, b.JoinedOn)
+		if err != nil {
+			return nil, err
+		}
+		b.Accrued = leavepolicy.Accrued(p, b.Allowance, joined, year, asOf(year))
+		b.CarriedOver = leavepolicy.Carry(p, b.PrevAllowance, b.PrevUsed, joined, year)
+		b.Available = b.Accrued + b.CarriedOver - b.Used - b.Reserved
+	}
+	return v, nil
+}
+
+// wib is Asia/Jakarta without depending on the host's tz database.
+var wib = time.FixedZone("WIB", 7*3600)
+
+// asOfToday counts accrual to today for the current year and to year end for
+// other years.
+func asOfToday(year int) time.Time {
+	now := time.Now().In(wib)
+	if now.Year() == year {
+		return time.Date(year, now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	return yearEnd(year)
+}
+
+func yearEnd(year int) time.Time { return time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC) }
 
 func (r *leaveRepository) Balances(ctx context.Context, companyID int64, employeeID *int64, year int) ([]model.Balance, error) {
-	v := []model.Balance{}
-	err := r.db.SelectContext(ctx, &v, balancesSQL, companyID, employeeID, year)
-	return v, err
+	return balances(ctx, r.db, companyID, employeeID, year, asOfToday)
 }
 
 func (r *leaveRepository) SetAllowance(ctx context.Context, companyID, actorID, employeeID int64, year, allowance int) error {
@@ -154,11 +204,20 @@ func (r *leaveRepository) SetAllowance(ctx context.Context, companyID, actorID, 
 	if err = lockEmployee(ctx, tx, companyID, employeeID); err != nil {
 		return err
 	}
-	var b model.Balance
-	if err = tx.GetContext(ctx, &b, balancesSQL, companyID, employeeID, year); err != nil {
+	rows, err := balances(ctx, tx, companyID, &employeeID, year, yearEnd)
+	if err != nil {
 		return err
 	}
-	if allowance < b.Used+b.Reserved {
+	if len(rows) == 0 {
+		return sql.ErrNoRows
+	}
+	b := rows[0]
+	cal, err := workCalendar(ctx, tx, companyID)
+	if err != nil {
+		return err
+	}
+	joined, _ := time.Parse(time.DateOnly, b.JoinedOn)
+	if leavepolicy.Accrued(leavePolicy(cal), allowance, joined, year, yearEnd(year))+b.CarriedOver < b.Used+b.Reserved {
 		return apperror.Conflict("Kuota tidak boleh lebih kecil dari cuti terpakai dan yang sedang diajukan")
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -176,11 +235,50 @@ func (r *leaveRepository) SetAllowance(ctx context.Context, companyID, actorID, 
 	return tx.Commit()
 }
 
+// checkAnnualBalance verifies an employee's annual-leave balance for every
+// year the given leave touches, counting accrual up to the leave's last day
+// in that year. withReserved also counts pending requests (new requests);
+// approvals only need the approved days to fit.
+func checkAnnualBalance(ctx context.Context, tx *sqlx.Tx, companyID, employeeID, leaveID int64, withReserved bool) error {
+	var years []struct {
+		Year int    `db:"year"`
+		Last string `db:"last"`
+	}
+	if err := tx.SelectContext(ctx, &years, `
+		SELECT EXTRACT(year FROM date)::int AS "year", max(date)::text AS "last" FROM leave_days
+		WHERE company_id = $1 AND leave_id = $2 GROUP BY 1`,
+		companyID, leaveID); err != nil {
+		return err
+	}
+	for _, y := range years {
+		last, err := time.Parse(time.DateOnly, y.Last)
+		if err != nil {
+			return err
+		}
+		rows, err := balances(ctx, tx, companyID, &employeeID, y.Year, func(int) time.Time { return last })
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return sql.ErrNoRows
+		}
+		b := rows[0]
+		spent := b.Used
+		if withReserved {
+			spent += b.Reserved
+		}
+		if b.Accrued+b.CarriedOver < spent {
+			return apperror.Conflict(fmt.Sprintf("Saldo cuti tahun %d tidak mencukupi (termasuk akrual sampai %s)", y.Year, y.Last))
+		}
+	}
+	return nil
+}
+
 func (r *leaveRepository) Leaves(ctx context.Context, companyID int64, employeeID *int64) ([]model.Leave, error) {
 	v := []model.Leave{}
 	err := r.db.SelectContext(ctx, &v, `
 		SELECT l.id, l.employee_id, e.name, l.kind, l.start_date::text, l.end_date::text,
-		       l.reason, l.status, l.calculation,
+		       l.reason, l.status, l.stage, l.review_note, l.calculation,
 		       (SELECT count(*) FROM leave_days ld WHERE ld.company_id = l.company_id AND ld.leave_id = l.id) days
 		FROM leave_requests l
 		JOIN employees e ON e.id = l.employee_id
@@ -218,8 +316,8 @@ func (r *leaveRepository) CreateLeave(ctx context.Context, companyID, employeeID
 	}
 	var id int64
 	err = tx.QueryRowxContext(ctx, `
-		INSERT INTO leave_requests (company_id, employee_id, kind, start_date, end_date, reason)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO leave_requests (company_id, employee_id, kind, start_date, end_date, reason, stage)
+		VALUES ($1, $2, $3, $4, $5, $6, `+approvalStage("$1", "$2")+`)
 		RETURNING id`,
 		companyID, employeeID, v.Kind, v.StartDate, v.EndDate, v.Reason).Scan(&id)
 	if err != nil {
@@ -240,29 +338,18 @@ func (r *leaveRepository) CreateLeave(ctx context.Context, companyID, employeeID
 		return apperror.Invalid("Rentang cuti tidak memiliki hari kerja")
 	}
 	if v.Kind == "annual" {
-		var years []int
-		if err = tx.SelectContext(ctx, &years, `
-			SELECT DISTINCT EXTRACT(year FROM date)::int FROM leave_days
-			WHERE company_id = $1 AND leave_id = $2`,
-			companyID, id); err != nil {
-			return err
-		}
-		for _, year := range years {
-			_, err = tx.ExecContext(ctx, `
+		for _, year := range []string{v.StartDate[:4], v.EndDate[:4]} {
+			// Freeze the year's allowance so later default changes keep it.
+			if _, err = tx.ExecContext(ctx, `
 				INSERT INTO leave_allocations (company_id, employee_id, year, allowance)
-				VALUES ($1, $2, $3, COALESCE((SELECT annual_allowance FROM work_calendars WHERE company_id = $1), 12))
+				VALUES ($1, $2, $3::int, COALESCE((SELECT annual_allowance FROM work_calendars WHERE company_id = $1), 12))
 				ON CONFLICT DO NOTHING`,
-				companyID, employeeID, year)
-			if err != nil {
+				companyID, employeeID, year); err != nil {
 				return err
 			}
-			var b model.Balance
-			if err = tx.GetContext(ctx, &b, balancesSQL, companyID, employeeID, year); err != nil {
-				return err
-			}
-			if b.Available < 0 {
-				return apperror.Conflict(fmt.Sprintf("Saldo cuti tahun %d tidak mencukupi", year))
-			}
+		}
+		if err = checkAnnualBalance(ctx, tx, companyID, employeeID, id, true); err != nil {
+			return err
 		}
 	}
 	if err = audit(ctx, tx, companyID, actorID, "create", "leave", id,
@@ -281,9 +368,10 @@ func (r *leaveRepository) ReviewLeave(ctx context.Context, companyID, leaveID, r
 	}
 	defer rollback(tx)
 	var employeeID int64
-	if err = tx.GetContext(ctx, &employeeID, `
-		SELECT employee_id FROM leave_requests WHERE company_id = $1 AND id = $2`,
-		companyID, leaveID); err != nil {
+	var kind string
+	if err = tx.QueryRowxContext(ctx, `
+		SELECT employee_id, kind FROM leave_requests WHERE company_id = $1 AND id = $2`,
+		companyID, leaveID).Scan(&employeeID, &kind); err != nil {
 		return err
 	}
 	if err = lockEmployee(ctx, tx, companyID, employeeID); err != nil {
@@ -299,26 +387,9 @@ func (r *leaveRepository) ReviewLeave(ctx context.Context, companyID, leaveID, r
 	if rowsAffected(res) == 0 {
 		return sql.ErrNoRows
 	}
-	if status == "approved" {
-		var excess bool
-		err = tx.GetContext(ctx, &excess, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM leave_days d
-				JOIN leave_requests l ON l.id = d.leave_id
-				LEFT JOIN leave_allocations a
-				       ON a.company_id = l.company_id AND a.employee_id = l.employee_id
-				      AND a.year = EXTRACT(year FROM d.date)
-				LEFT JOIN work_calendars w ON w.company_id = l.company_id
-				WHERE l.company_id = $1 AND l.employee_id = $2 AND l.kind = 'annual' AND l.status = 'approved'
-				GROUP BY EXTRACT(year FROM d.date), a.allowance, w.annual_allowance
-				HAVING count(*) > COALESCE(a.allowance, w.annual_allowance, 12))`,
-			companyID, employeeID)
-		if err != nil {
+	if status == "approved" && kind == "annual" {
+		if err = checkAnnualBalance(ctx, tx, companyID, employeeID, leaveID, false); err != nil {
 			return err
-		}
-		if excess {
-			return apperror.Conflict("Saldo cuti tidak mencukupi; periksa alokasi tahunan")
 		}
 	}
 	if err = audit(ctx, tx, companyID, reviewerID, status, "leave", leaveID, "Keputusan pengajuan cuti"); err != nil {

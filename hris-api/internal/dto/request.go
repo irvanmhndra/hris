@@ -14,7 +14,15 @@ type Employee struct {
 	Status       string `json:"status"`
 	JoinedOn     string `json:"joined_on"`
 	LeftOn       string `json:"left_on"`
+	ManagerID    *int64 `json:"manager_id"`
 	Password     string `json:"password"`
+}
+
+// TeamReview is a manager's decision on a direct report's request.
+type TeamReview struct {
+	Action  string `json:"action"`
+	Note    string `json:"note"`
+	Version int    `json:"version"`
 }
 
 // EmployeeQuery filters the employee list. Page 0 returns every match

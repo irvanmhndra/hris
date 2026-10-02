@@ -282,6 +282,23 @@ func (r *payrollRepository) CreatePayroll(ctx context.Context, companyID, actorI
 		companyID, pq.Array(ids), periodStart); err != nil {
 		return 0, err
 	}
+	var unpaid []struct {
+		EmployeeID int64  `db:"employee_id"`
+		Date       string `db:"date"`
+	}
+	if err = tx.SelectContext(ctx, &unpaid, `
+		SELECT l.employee_id, d.date::text date
+		FROM leave_days d
+		JOIN leave_requests l ON l.company_id = d.company_id AND l.id = d.leave_id
+		WHERE l.company_id = $1 AND l.kind = 'unpaid' AND l.status = 'approved' AND l.employee_id = ANY($2)
+		  AND d.date >= $3::date AND d.date < ($3::date + interval '1 month')`,
+		companyID, pq.Array(ids), periodStart); err != nil {
+		return 0, err
+	}
+	unpaidDays := map[int64][]string{}
+	for _, u := range unpaid {
+		unpaidDays[u.EmployeeID] = append(unpaidDays[u.EmployeeID], u.Date)
+	}
 	overtime := map[int64][]model.OvertimeClaim{}
 	for _, c := range claims {
 		overtime[c.EmployeeID] = append(overtime[c.EmployeeID], c.OvertimeClaim)
@@ -290,7 +307,7 @@ func (r *payrollRepository) CreatePayroll(ctx context.Context, companyID, actorI
 		src.Employees = append(src.Employees, model.PayrollEmployee{
 			ID: p.EmployeeID, Name: p.Name, Code: p.Code, Position: p.Position,
 			JoinedOn: p.JoinedOn, LeftOn: p.LeftOn, Salary: salaries[i],
-			Overtime: overtime[p.EmployeeID], YTD: ytd[p.EmployeeID],
+			Overtime: overtime[p.EmployeeID], YTD: ytd[p.EmployeeID], UnpaidLeave: unpaidDays[p.EmployeeID],
 		})
 	}
 
@@ -313,13 +330,13 @@ func (r *payrollRepository) CreatePayroll(ctx context.Context, companyID, actorI
 			       (company_id, run_id, employee_id, employee_name, employee_code, position, note,
 			        ptkp_status, tax_method, bpjs_kesehatan, bpjs_ketenagakerjaan, bpjs_pensiun,
 			        final_period, worked_days, period_days, basic_salary, allowance, deduction,
-			        taxable_gross, pension_deduction, pph21, employer_cost)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			        taxable_gross, pension_deduction, pph21, employer_cost, unpaid_leave_days)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 			RETURNING id`,
 			companyID, id, d.EmployeeID, d.Name, d.Code, d.Position, d.Note,
 			d.PTKPStatus, d.TaxMethod, d.BPJSKesehatan, d.BPJSKetenagakerjaan, d.BPJSPensiun,
 			d.FinalPeriod, d.WorkedDays, d.PeriodDays, d.BasicSalary, d.Allowance, d.Deduction,
-			d.TaxableGross, d.Pension, d.PPh21, d.EmployerCost,
+			d.TaxableGross, d.Pension, d.PPh21, d.EmployerCost, d.UnpaidLeaveDays,
 		).Scan(&entryID); err != nil {
 			return 0, err
 		}
@@ -363,7 +380,7 @@ func (r *payrollRepository) Payslips(ctx context.Context, companyID int64, emplo
 		SELECT e.id, e.run_id, e.employee_id, e.employee_name, e.employee_code, e.position,
 		       to_char(r.period, 'YYYY-MM') period, r.status, e.basic_salary, e.allowance, e.deduction,
 		       (e.basic_salary + e.allowance - e.deduction) net, e.ptkp_status, e.tax_method,
-		       e.final_period, e.worked_days, e.period_days, e.taxable_gross, e.pph21, e.employer_cost,
+		       e.final_period, e.worked_days, e.period_days, e.unpaid_leave_days, e.taxable_gross, e.pph21, e.employer_cost,
 		       e.note, e.version
 		FROM payroll_entries e
 		JOIN payroll_runs r ON r.id = e.run_id AND r.company_id = e.company_id

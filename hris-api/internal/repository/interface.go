@@ -80,6 +80,14 @@ type PayrollRepository interface {
 	PayrollAction(ctx context.Context, companyID, actorID, runID int64, action, reference string) error
 }
 
+// ApprovalRepository handles the manager stage of two-step approvals.
+// managerID is the manager's employee id.
+type ApprovalRepository interface {
+	TeamApprovals(ctx context.Context, companyID, managerID int64) ([]model.TeamRequest, error)
+	ManagerReviewLeave(ctx context.Context, companyID, managerID, actorID, leaveID int64, approve bool, note string) error
+	ManagerReviewHRItem(ctx context.Context, companyID, managerID, actorID int64, module string, id int64, approve bool, note string, version int) error
+}
+
 type AuditRepository interface {
 	AuditLogs(ctx context.Context, companyID int64, limit, offset int) ([]model.AuditLog, int, error)
 }

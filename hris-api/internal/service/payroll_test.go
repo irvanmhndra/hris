@@ -72,7 +72,7 @@ func TestBuildPayroll(t *testing.T) {
 			{ID: 1, Name: "Full", JoinedOn: "2024-01-05", Salary: salary(0), Overtime: []model.OvertimeClaim{
 				{ID: 7, StartAt: "2026-03-02T11:00:00Z", EndAt: "2026-03-02T13:00:00Z"}, // Monday 18:00–20:00 WIB
 				{ID: 8, StartAt: "2026-03-20T02:00:00Z", EndAt: "2026-03-20T03:00:00Z"}, // holiday
-			}},
+			}, UnpaidLeave: []string{"2026-03-03", "2026-03-20"}}, // a workday and a holiday
 			{ID: 2, Name: "Joiner", JoinedOn: "2026-03-16", Salary: salary(8_770_000)},
 			{ID: 3, Name: "Leaver", JoinedOn: "2025-11-01", LeftOn: &left, Salary: salary(8_770_000)},
 		},
@@ -96,7 +96,7 @@ func TestBuildPayroll(t *testing.T) {
 	if line(full, payroll.CodeOvertime) != 55_000 || len(full.OvertimeIDs) != 2 {
 		t.Fatalf("overtime = %d ids %v", line(full, payroll.CodeOvertime), full.OvertimeIDs)
 	}
-	if line(full, payroll.CodeTHR) != 1_730_000 || full.PeriodDays != 21 || full.WorkedDays != 21 || full.FinalPeriod {
+	if line(full, payroll.CodeTHR) != 1_730_000 || full.PeriodDays != 21 || full.WorkedDays != 20 || full.UnpaidLeaveDays != 1 || full.FinalPeriod {
 		t.Fatalf("full-month employee: %+v", full)
 	}
 	// Joined Mon 16 March: 11 of 21 working days (20 March is a holiday).

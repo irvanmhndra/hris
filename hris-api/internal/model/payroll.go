@@ -80,6 +80,7 @@ type Payslip struct {
 	FinalPeriod  bool          `db:"final_period" json:"final_period"`
 	WorkedDays   int           `db:"worked_days" json:"worked_days"`
 	PeriodDays   int           `db:"period_days" json:"period_days"`
+	UnpaidDays   int           `db:"unpaid_leave_days" json:"unpaid_leave_days"`
 	TaxableGross int64         `db:"taxable_gross" json:"taxable_gross"`
 	PPh21        int64         `db:"pph21" json:"pph21"`
 	EmployerCost int64         `db:"employer_cost" json:"employer_cost"`
@@ -116,6 +117,8 @@ type PayrollEmployee struct {
 	Salary   Salary
 	Overtime []OvertimeClaim
 	YTD      YearToDate
+	// UnpaidLeave lists approved unpaid-leave dates in the period.
+	UnpaidLeave []string
 }
 
 // PayrollSource is read in one repeatable-read snapshot when a run is created.
@@ -153,6 +156,7 @@ type PayrollEntryDraft struct {
 	FinalPeriod         bool
 	WorkedDays          int
 	PeriodDays          int
+	UnpaidLeaveDays     int
 	BasicSalary         int64
 	Allowance           int64
 	Deduction           int64

@@ -19,6 +19,7 @@ type repositories struct {
 	payroll    repository.PayrollRepository
 	audit      repository.AuditRepository
 	dashboard  repository.DashboardRepository
+	approval   repository.ApprovalRepository
 }
 
 func newRepositories(db *sqlx.DB) repositories {
@@ -32,6 +33,7 @@ func newRepositories(db *sqlx.DB) repositories {
 		payroll:    postgres.NewPayrollRepository(db),
 		audit:      postgres.NewAuditRepository(db),
 		dashboard:  postgres.NewDashboardRepository(db),
+		approval:   postgres.NewApprovalRepository(db),
 	}
 }
 
@@ -45,6 +47,7 @@ type services struct {
 	Payroll    *service.PayrollService
 	Audit      *service.AuditService
 	Dashboard  *service.DashboardService
+	Approval   *service.ApprovalService
 }
 
 func newServices(r repositories) services {
@@ -58,6 +61,7 @@ func newServices(r repositories) services {
 		Payroll:    service.NewPayrollService(r.payroll),
 		Audit:      service.NewAuditService(r.audit),
 		Dashboard:  service.NewDashboardService(r.dashboard),
+		Approval:   service.NewApprovalService(r.approval),
 	}
 }
 
@@ -72,5 +76,6 @@ func newHandlers(s services) *router.Handlers {
 		Payroll:    handler.NewPayrollHandler(s.Payroll),
 		Dashboard:  handler.NewDashboardHandler(s.Dashboard),
 		Audit:      handler.NewAuditHandler(s.Audit),
+		Approval:   handler.NewApprovalHandler(s.Approval),
 	}
 }

@@ -16,7 +16,8 @@ type EmployeeInput struct {
 	JoinedOn     string
 	// LeftOn is the last working day of an inactive employee; empty keeps the
 	// stored date (or today on deactivation).
-	LeftOn string
+	LeftOn    string
+	ManagerID *int64
 	// PasswordHash is empty when the password is unchanged.
 	PasswordHash string
 }

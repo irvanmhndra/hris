@@ -15,7 +15,9 @@ func NewAuthRepository(db *sqlx.DB) repository.AuthRepository {
 }
 
 const userFields = `u.id, u.company_id, u.employee_id, u.name, u.email, u.role,
-	u.password_hash, c.name AS company_name`
+	u.password_hash, c.name AS company_name,
+	EXISTS (SELECT 1 FROM employees r WHERE r.company_id = u.company_id AND r.manager_id = u.employee_id
+	        AND r.status = 'active') AS is_manager`
 
 // A user may log in (and keep a session) only while their linked employee
 // record, if any, is active.

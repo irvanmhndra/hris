@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/irvanmhndra/hris-api/internal/dto"
+	"github.com/irvanmhndra/hris-api/internal/leavepolicy"
 	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/repository"
 	"github.com/irvanmhndra/hris-api/pkg/apperror"
@@ -31,6 +32,15 @@ func (s *LeaveService) SaveCalendar(ctx context.Context, u *model.User, v model.
 			return apperror.Invalid("Hari kerja harus unik (0–6)")
 		}
 		seen[d] = true
+	}
+	if v.LeaveAccrual == "" {
+		v.LeaveAccrual = leavepolicy.Annual
+	}
+	if v.LeaveAccrual != leavepolicy.Annual && v.LeaveAccrual != leavepolicy.Monthly {
+		return apperror.Invalid("Akrual cuti harus tahunan atau bulanan")
+	}
+	if v.CarryOverMax < 0 || v.CarryOverMax > 366 || v.LeaveEligibilityMonths < 0 || v.LeaveEligibilityMonths > 24 {
+		return apperror.Invalid("Carry-over maksimal 366 hari dan masa tunggu cuti 0–24 bulan")
 	}
 	start, e1 := time.Parse("15:04", v.StartTime)
 	end, e2 := time.Parse("15:04", v.EndTime)
@@ -86,7 +96,7 @@ func ValidateLeave(v dto.Leave) error {
 	if end.Sub(start) > 365*24*time.Hour {
 		return apperror.Invalid("Durasi cuti maksimal 366 hari")
 	}
-	if v.Kind != "annual" && v.Kind != "sick" && v.Kind != "personal" {
+	if v.Kind != "annual" && v.Kind != "sick" && v.Kind != "personal" && v.Kind != "unpaid" {
 		return apperror.Invalid("Jenis cuti tidak valid")
 	}
 	if len(strings.TrimSpace(v.Reason)) < 5 || len(v.Reason) > 1000 {

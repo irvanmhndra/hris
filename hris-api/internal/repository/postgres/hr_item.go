@@ -18,7 +18,7 @@ func NewHRItemRepository(db *sqlx.DB) repository.HRItemRepository {
 
 const itemFields = `h.id, h.module, h.employee_id, COALESCE(e.name, '') employee_name, h.title,
 	h.description, h.status, COALESCE(h.due_date::text, '') due_date, h.data, h.version,
-	h.review_note, h.created_at`
+	h.stage, h.review_note, h.created_at`
 
 func (r *hrItemRepository) HRItems(ctx context.Context, companyID int64, module string, scope model.HRItemScope) ([]model.HRItem, error) {
 	v := []model.HRItem{}
@@ -99,8 +99,9 @@ func (r *hrItemRepository) SaveHRItem(ctx context.Context, companyID, actorID in
 	action := "create"
 	if id == 0 {
 		err = tx.QueryRowxContext(ctx, `
-			INSERT INTO hr_items (company_id, module, employee_id, title, description, status, due_date, data, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::date, $8, $9)
+			INSERT INTO hr_items (company_id, module, employee_id, title, description, status, due_date, data, created_by, stage)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::date, $8, $9,
+			        CASE WHEN $2 IN ('overtime', 'corrections') THEN `+approvalStage("$1", "$3")+` ELSE 'hr' END)
 			RETURNING id`,
 			companyID, module, v.EmployeeID, v.Title, v.Description, v.Status, v.DueDate, string(v.Data), actorID).Scan(&id)
 		if err != nil {

@@ -16,6 +16,7 @@ type Handlers struct {
 	Profile    *handler.ProfileHandler
 	HRItem     *handler.HRItemHandler
 	Payroll    *handler.PayrollHandler
+	Approval   *handler.ApprovalHandler
 	Dashboard  *handler.DashboardHandler
 	Audit      *handler.AuditHandler
 }
@@ -72,4 +73,6 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	staff.PUT("/profile", h.Profile.SaveProfile)
 	staff.GET("/payslips", h.Payroll.Payslips)
 	staff.POST("/attendance/:action", h.Attendance.Clock)
+	staff.GET("/team/approvals", h.Approval.TeamApprovals)
+	staff.POST("/team/approvals/:type/:id", h.Approval.Review)
 }

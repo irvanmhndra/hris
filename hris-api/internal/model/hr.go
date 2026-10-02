@@ -11,6 +11,12 @@ type WorkCalendar struct {
 	AnnualAllowance int           `db:"annual_allowance" json:"annual_allowance"`
 	StartTime       string        `db:"start_time" json:"start_time"`
 	EndTime         string        `db:"end_time" json:"end_time"`
+	// Annual-leave policy: "annual" (upfront) or "monthly" accrual, days of
+	// unused leave carried into the next year, and service months before
+	// annual leave is earned.
+	LeaveAccrual           string `db:"leave_accrual" json:"leave_accrual"`
+	CarryOverMax           int    `db:"carry_over_max" json:"carry_over_max"`
+	LeaveEligibilityMonths int    `db:"leave_eligibility_months" json:"leave_eligibility_months"`
 }
 type Holiday struct {
 	ID   int64  `db:"id" json:"id"`
@@ -22,9 +28,16 @@ type Balance struct {
 	Name       string `db:"name" json:"name"`
 	Year       int    `db:"year" json:"year"`
 	Allowance  int    `db:"allowance" json:"allowance"`
-	Used       int    `db:"used" json:"used"`
-	Reserved   int    `db:"reserved" json:"reserved"`
-	Available  int    `db:"available" json:"available"`
+	// Accrued is the part of the allowance earned so far; CarriedOver comes
+	// from the previous year's unused entitlement.
+	Accrued       int    `db:"-" json:"accrued"`
+	CarriedOver   int    `db:"-" json:"carried_over"`
+	Used          int    `db:"used" json:"used"`
+	Reserved      int    `db:"reserved" json:"reserved"`
+	Available     int    `db:"-" json:"available"`
+	JoinedOn      string `db:"joined_on" json:"-"`
+	PrevAllowance int    `db:"prev_allowance" json:"-"`
+	PrevUsed      int    `db:"prev_used" json:"-"`
 }
 type Profile struct {
 	EmployeeID        int64  `db:"employee_id" json:"employee_id"`
@@ -51,6 +64,7 @@ type HRItem struct {
 	DueDate      string          `db:"due_date" json:"due_date"`
 	Data         json.RawMessage `db:"data" json:"data"`
 	Version      int             `db:"version" json:"version"`
+	Stage        string          `db:"stage" json:"stage"`
 	ReviewNote   string          `db:"review_note" json:"review_note"`
 	CreatedAt    time.Time       `db:"created_at" json:"created_at"`
 }

@@ -50,3 +50,15 @@ func attendanceFingerprint(ctx context.Context, tx *sqlx.Tx, companyID, employee
 	}
 	return v, err
 }
+
+// approvalStage is a SQL expression for the first approval stage of a new
+// request by an employee: "manager" when they report to an active manager
+// with a portal account, otherwise straight to "hr". Arguments are the
+// placeholders holding the company and employee ids.
+func approvalStage(company, employee string) string {
+	return `(CASE WHEN EXISTS (
+		SELECT 1 FROM employees r
+		JOIN employees m ON m.company_id = r.company_id AND m.id = r.manager_id AND m.status = 'active'
+		JOIN users mu ON mu.company_id = m.company_id AND mu.employee_id = m.id
+		WHERE r.company_id = ` + company + ` AND r.id = ` + employee + `) THEN 'manager' ELSE 'hr' END)`
+}
