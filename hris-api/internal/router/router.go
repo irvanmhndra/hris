@@ -1,12 +1,22 @@
 package router
 
 import (
+	"time"
+
 	"github.com/irvanmhndra/hris-api/internal/handler"
 	"github.com/irvanmhndra/hris-api/internal/middleware"
 	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/labstack/echo/v5"
 	em "github.com/labstack/echo/v5/middleware"
 )
+
+// selfServiceLimit allows a burst of 5 requests per IP, refilling one every
+// 10 seconds, for unauthenticated account endpoints.
+func selfServiceLimit() echo.MiddlewareFunc {
+	return em.RateLimiter(em.NewRateLimiterMemoryStoreWithConfig(em.RateLimiterMemoryStoreConfig{
+		Rate: 0.1, Burst: 5, ExpiresIn: 10 * time.Minute,
+	}))
+}
 
 type Handlers struct {
 	Auth       *handler.AuthHandler
@@ -17,6 +27,7 @@ type Handlers struct {
 	HRItem     *handler.HRItemHandler
 	Payroll    *handler.PayrollHandler
 	Approval   *handler.ApprovalHandler
+	File       *handler.FileHandler
 	Dashboard  *handler.DashboardHandler
 	Audit      *handler.AuditHandler
 }
@@ -26,6 +37,10 @@ type Handlers struct {
 func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	api := e.Group("/api/v1")
 	api.POST("/auth/login", h.Auth.Login, em.RateLimiter(em.NewRateLimiterMemoryStore(2)))
+	api.GET("/auth/config", h.Auth.Config)
+	api.POST("/auth/forgot-password", h.Auth.ForgotPassword, selfServiceLimit())
+	api.POST("/auth/reset-password", h.Auth.ResetPassword, selfServiceLimit())
+	api.POST("/auth/register", h.Auth.Register, selfServiceLimit())
 
 	// Any signed-in user (data is scoped to the caller by the services).
 	auth := api.Group("", middleware.Auth(authn))
@@ -36,6 +51,7 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	auth.GET("/calendar", h.Leave.WorkCalendar)
 	auth.GET("/holidays", h.Leave.Holidays)
 	auth.GET("/leave-balances", h.Leave.Balances)
+	auth.GET("/files/:id", h.File.Download)
 	auth.GET("/hr/:module", h.HRItem.HRItems)
 	auth.POST("/hr/:module", h.HRItem.SaveHRItem)
 	auth.PUT("/hr/:module/:id", h.HRItem.SaveHRItem)
@@ -43,6 +59,7 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 
 	admin := auth.Group("", middleware.Role(model.RoleAdmin))
 	admin.GET("/dashboard", h.Dashboard.Dashboard)
+	admin.POST("/files", h.File.Upload)
 	admin.PUT("/calendar", h.Leave.SaveCalendar)
 	admin.POST("/holidays", h.Leave.SaveHoliday)
 	admin.DELETE("/holidays/:id", h.Leave.DeleteHoliday)
@@ -64,6 +81,7 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	admin.GET("/employees", h.Employee.Employees)
 	admin.POST("/employees", h.Employee.SaveEmployee)
 	admin.PUT("/employees/:id", h.Employee.SaveEmployee)
+	admin.POST("/hr/recruitment/:id/convert", h.Employee.ConvertCandidate)
 	admin.PATCH("/leaves/:id", h.Leave.ReviewLeave)
 	admin.GET("/shifts", h.Attendance.Shifts)
 	admin.POST("/shifts", h.Attendance.SaveShift)

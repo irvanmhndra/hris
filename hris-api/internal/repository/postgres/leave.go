@@ -275,7 +275,14 @@ func checkAnnualBalance(ctx context.Context, tx *sqlx.Tx, companyID, employeeID,
 	return nil
 }
 
-func (r *leaveRepository) Leaves(ctx context.Context, companyID int64, employeeID *int64) ([]model.Leave, error) {
+func (r *leaveRepository) Leaves(ctx context.Context, companyID int64, employeeID *int64, f model.ListFilter) ([]model.Leave, int, error) {
+	var total int
+	if err := r.db.GetContext(ctx, &total, `
+		SELECT count(*) FROM leave_requests
+		WHERE company_id = $1 AND ($2::bigint IS NULL OR employee_id = $2) AND ($3 = '' OR status = $3)`,
+		companyID, employeeID, f.Status); err != nil {
+		return nil, 0, err
+	}
 	v := []model.Leave{}
 	err := r.db.SelectContext(ctx, &v, `
 		SELECT l.id, l.employee_id, e.name, l.kind, l.start_date::text, l.end_date::text,
@@ -283,10 +290,11 @@ func (r *leaveRepository) Leaves(ctx context.Context, companyID int64, employeeI
 		       (SELECT count(*) FROM leave_days ld WHERE ld.company_id = l.company_id AND ld.leave_id = l.id) days
 		FROM leave_requests l
 		JOIN employees e ON e.id = l.employee_id
-		WHERE l.company_id = $1 AND ($2::bigint IS NULL OR l.employee_id = $2)
-		ORDER BY l.created_at DESC`,
-		companyID, employeeID)
-	return v, err
+		WHERE l.company_id = $1 AND ($2::bigint IS NULL OR l.employee_id = $2) AND ($3 = '' OR l.status = $3)
+		ORDER BY l.created_at DESC, l.id DESC
+		LIMIT $4 OFFSET $5`,
+		companyID, employeeID, f.Status, limitOf(f), f.Offset)
+	return v, total, err
 }
 
 // CreateLeave locks the employee, rejects overlaps, snapshots the working days

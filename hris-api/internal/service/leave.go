@@ -83,8 +83,13 @@ func (s *LeaveService) SetAllowance(ctx context.Context, u *model.User, employee
 	return s.repo.SetAllowance(ctx, u.CompanyID, u.ID, employeeID, year, allowance)
 }
 
-func (s *LeaveService) Leaves(ctx context.Context, u *model.User) ([]model.Leave, error) {
-	return s.repo.Leaves(ctx, u.CompanyID, ownScope(u))
+func (s *LeaveService) Leaves(ctx context.Context, u *model.User, q dto.ListQuery) (Page[model.Leave], error) {
+	out, f, err := listFilter[model.Leave](q, 0, "pending", "approved", "rejected", "cancelled")
+	if err != nil {
+		return out, err
+	}
+	out.Items, out.Total, err = s.repo.Leaves(ctx, u.CompanyID, ownScope(u), f)
+	return out, err
 }
 
 func ValidateLeave(v dto.Leave) error {

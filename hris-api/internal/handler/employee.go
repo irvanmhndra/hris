@@ -59,6 +59,19 @@ func (h *EmployeeHandler) Employees(c *echo.Context) error {
 	return httputil.SuccessWithPagination(c, page.Items, httputil.NewPagination(page.Page, page.PerPage, page.Total))
 }
 
+func (h *EmployeeHandler) ConvertCandidate(c *echo.Context) error {
+	candidateID, err := pathID(c)
+	if err != nil {
+		return httputil.Error(c, err)
+	}
+	var v dto.Employee
+	if err = bind(c, &v); err != nil {
+		return httputil.Error(c, err)
+	}
+	id, err := h.svc.ConvertCandidate(c.Request().Context(), middleware.User(c), candidateID, v)
+	return respond(c, map[string]int64{"id": id}, err)
+}
+
 func (h *EmployeeHandler) SaveEmployee(c *echo.Context) error {
 	var v dto.Employee
 	if err := bind(c, &v); err != nil {

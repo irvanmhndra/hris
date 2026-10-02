@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/irvanmhndra/hris-api/internal/model"
@@ -21,18 +23,26 @@ const itemFields = `h.id, h.module, h.employee_id, COALESCE(e.name, '') employee
 	h.description, h.status, COALESCE(h.due_date::text, '') due_date, h.data, h.version,
 	h.stage, h.review_note, h.created_at`
 
-func (r *hrItemRepository) HRItems(ctx context.Context, companyID int64, module string, scope model.HRItemScope) ([]model.HRItem, error) {
-	v := []model.HRItem{}
-	err := r.db.SelectContext(ctx, &v, `
-		SELECT `+itemFields+`
+func (r *hrItemRepository) HRItems(ctx context.Context, companyID int64, module string, scope model.HRItemScope, f model.ListFilter) ([]model.HRItem, int, error) {
+	const where = `
 		FROM hr_items h
 		LEFT JOIN employees e ON e.id = h.employee_id AND e.company_id = h.company_id
 		WHERE h.company_id = $1 AND h.module = $2
 		  AND ($3::bigint IS NULL OR h.employee_id = $3)
 		  AND ($4 OR h.module NOT IN ('announcements', 'documents') OR h.status = 'published')
-		ORDER BY h.created_at DESC, h.id DESC`,
-		companyID, module, scope.EmployeeID, scope.IncludeUnpublished)
-	return v, err
+		  AND ($5 = '' OR h.status = $5)`
+	args := []any{companyID, module, scope.EmployeeID, scope.IncludeUnpublished, f.Status}
+	var total int
+	if err := r.db.GetContext(ctx, &total, `SELECT count(*) `+where, args...); err != nil {
+		return nil, 0, err
+	}
+	v := []model.HRItem{}
+	err := r.db.SelectContext(ctx, &v, `
+		SELECT `+itemFields+where+`
+		ORDER BY h.created_at DESC, h.id DESC
+		LIMIT $6 OFFSET $7`,
+		append(args, limitOf(f), f.Offset)...)
+	return v, total, err
 }
 
 // SaveHRItem creates (id == 0) or updates an item. Updates use optimistic
@@ -69,6 +79,23 @@ func (r *hrItemRepository) SaveHRItem(ctx context.Context, companyID, actorID in
 		}
 		if overlap {
 			return 0, apperror.Conflict("Waktu lembur bertumpang tindih")
+		}
+	case "documents", "announcements":
+		var data model.HRData
+		if err = json.Unmarshal(v.Data, &data); err != nil {
+			return 0, err
+		}
+		if data.FileID != 0 {
+			if err = tx.GetContext(ctx, &data.FileName, `
+				SELECT name FROM files WHERE company_id = $1 AND id = $2`, companyID, data.FileID); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return 0, apperror.Invalid("File lampiran tidak ditemukan")
+				}
+				return 0, err
+			}
+			if v.Data, err = json.Marshal(data); err != nil {
+				return 0, err
+			}
 		}
 	case "corrections":
 		var data model.HRData
@@ -112,7 +139,7 @@ func (r *hrItemRepository) SaveHRItem(ctx context.Context, companyID, actorID in
 		action = "update"
 		res, err := tx.ExecContext(ctx, `
 			UPDATE hr_items
-			SET employee_id = $4, title = $5, description = $6, status = $7,
+			SET employee_id = CASE WHEN $2 = 'recruitment' THEN employee_id ELSE $4 END, title = $5, description = $6, status = $7,
 			    due_date = NULLIF($8, '')::date, data = $9, version = version + 1, updated_at = now()
 			WHERE company_id = $1 AND module = $2 AND id = $3 AND version = $10`,
 			companyID, module, id, v.EmployeeID, v.Title, v.Description, v.Status, v.DueDate, string(v.Data), v.Version)

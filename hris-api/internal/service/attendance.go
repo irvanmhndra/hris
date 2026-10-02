@@ -26,9 +26,15 @@ func NewAttendanceService(repo repository.AttendanceRepository) *AttendanceServi
 	return &AttendanceService{repo: repo, now: time.Now}
 }
 
-// Attendances returns the latest records: company-wide for admins, own for employees.
-func (s *AttendanceService) Attendances(ctx context.Context, u *model.User) ([]model.Attendance, error) {
-	return s.repo.Attendances(ctx, u.CompanyID, ownScope(u))
+// Attendances lists records newest first: company-wide for admins, own for
+// employees. Unpaged it returns the latest 100, as it always has.
+func (s *AttendanceService) Attendances(ctx context.Context, u *model.User, q dto.ListQuery) (Page[model.Attendance], error) {
+	out, f, err := listFilter[model.Attendance](q, 100)
+	if err != nil {
+		return out, err
+	}
+	out.Items, out.Total, err = s.repo.Attendances(ctx, u.CompanyID, ownScope(u), f)
+	return out, err
 }
 
 // Today is an employee's schedule for today plus the check-in rules.

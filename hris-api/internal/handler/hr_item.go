@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/irvanmhndra/hris-api/internal/dto"
 	"github.com/irvanmhndra/hris-api/internal/middleware"
+	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/service"
 	"github.com/irvanmhndra/hris-api/pkg/httputil"
 	"github.com/labstack/echo/v5"
@@ -16,8 +17,9 @@ func NewHRItemHandler(svc *service.HRItemService) *HRItemHandler {
 }
 
 func (h *HRItemHandler) HRItems(c *echo.Context) error {
-	v, err := h.svc.HRItems(c.Request().Context(), middleware.User(c), c.Param("module"))
-	return respond(c, v, err)
+	return listed(c, func(q dto.ListQuery) (service.Page[model.HRItem], error) {
+		return h.svc.HRItems(c.Request().Context(), middleware.User(c), c.Param("module"), q)
+	})
 }
 
 func (h *HRItemHandler) SaveHRItem(c *echo.Context) error {

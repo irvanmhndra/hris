@@ -53,11 +53,15 @@ func NewServer(db *sqlx.DB, cfg config.Config) *echo.Echo {
 			AllowHeaders: []string{"Accept", "Authorization", "Content-Type", echo.HeaderXRequestID},
 		}))
 	}
-	e.Use(em.BodyLimit(maxBodyBytes))
+	// Uploads carry their own 10 MB limit; every other request is capped at 1 MB.
+	e.Use(em.BodyLimitWithConfig(em.BodyLimitConfig{
+		LimitBytes: maxBodyBytes,
+		Skipper:    func(c *echo.Context) bool { return c.Request().URL.Path == "/api/v1/files" },
+	}))
 
 	e.GET("/health", health(db))
 
-	svcs := newServices(newRepositories(db))
+	svcs := newServices(newRepositories(db), cfg)
 	router.Setup(e, newHandlers(svcs), svcs.Auth)
 	return e
 }

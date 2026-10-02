@@ -5,6 +5,34 @@ type Login struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
+
+// ListQuery pages a list (?page=&per_page=) and filters it by status or
+// date. Without page the list keeps its original unpaginated response.
+type ListQuery struct {
+	Page    int
+	PerPage int
+	Status  string
+	Date    string
+}
+
+type ForgotPassword struct {
+	Company string `json:"company"`
+	Email   string `json:"email"`
+}
+
+type ResetPassword struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+type Register struct {
+	CompanyName string `json:"company_name"`
+	CompanySlug string `json:"company_slug"`
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+}
+
 type Employee struct {
 	Code         string `json:"code"`
 	Name         string `json:"name"`

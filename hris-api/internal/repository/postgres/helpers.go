@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -61,4 +62,9 @@ func approvalStage(company, employee string) string {
 		JOIN employees m ON m.company_id = r.company_id AND m.id = r.manager_id AND m.status = 'active'
 		JOIN users mu ON mu.company_id = m.company_id AND mu.employee_id = m.id
 		WHERE r.company_id = ` + company + ` AND r.id = ` + employee + `) THEN 'manager' ELSE 'hr' END)`
+}
+
+// limitOf maps a filter's limit to SQL: LIMIT NULL means no limit.
+func limitOf(f model.ListFilter) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(f.Limit), Valid: f.Limit > 0}
 }

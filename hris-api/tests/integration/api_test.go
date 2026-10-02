@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -74,7 +75,7 @@ func TestHRISWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	auth := postgres.NewAuthRepository(isolated)
-	e := app.NewServer(isolated, config.Config{})
+	e := app.NewServer(isolated, config.Config{SignupEnabled: true, UploadDir: t.TempDir()})
 	request := func(method, path, token string, body any, want int) map[string]any {
 		t.Helper()
 		b, _ := json.Marshal(body)
@@ -284,7 +285,7 @@ func TestHRISWorkflow(t *testing.T) {
 	request("POST", "/hr/assets", "admin", map[string]any{"title": "Laptop", "employee_id": 1, "status": "assigned", "data": map[string]any{"code": "LAP-01"}}, 200)
 	request("POST", "/hr/assets", "admin", map[string]any{"title": "Laptop duplicate", "status": "available", "data": map[string]any{"code": "LAP-01"}}, 409)
 	request("GET", "/hr/recruitment", "staff", nil, 403)
-	request("POST", "/hr/recruitment", "admin", map[string]any{"title": "Candidate Test", "status": "applied", "data": map[string]any{"email": "candidate@example.test", "position": "Engineer"}}, 200)
+	candidate := itemID(request("POST", "/hr/recruitment", "admin", map[string]any{"title": "Candidate Test", "status": "applied", "data": map[string]any{"email": "candidate@example.test", "position": "Engineer"}}, 200))
 	overtime := map[string]any{"title": "Release support", "description": "Support production release", "employee_id": 2, "data": map[string]any{"start_at": "2026-11-10T18:00:00+07:00", "end_at": "2026-11-10T20:00:00+07:00"}}
 	ot := itemID(request("POST", "/hr/overtime", "staff", overtime, 200))
 	request("POST", "/hr/overtime", "staff", overtime, 409)
@@ -494,6 +495,120 @@ func TestHRISWorkflow(t *testing.T) {
 	if hw.Code != 200 || !strings.Contains(hw.Body.String(), `"database":"connected"`) || hw.Header().Get("X-Request-Id") == "" {
 		t.Fatalf("health: %d %s", hw.Code, hw.Body.String())
 	}
+
+	// Platform: list pagination and filters.
+	paged := request("GET", "/leaves?page=1&per_page=1", "admin", nil, 200)
+	if len(paged["data"].([]any)) != 1 || paged["meta"].(map[string]any)["pagination"].(map[string]any)["total_records"].(float64) < 2 {
+		t.Fatalf("leave pagination: %v", paged["meta"])
+	}
+	for _, l := range request("GET", "/leaves?status=approved", "admin", nil, 200)["data"].([]any) {
+		if l.(map[string]any)["status"] != "approved" {
+			t.Fatal("leave status filter")
+		}
+	}
+	request("GET", "/leaves?status=bogus", "admin", nil, 422)
+	request("GET", "/hr/overtime?status=bogus", "admin", nil, 422)
+	if request("GET", "/attendances?page=1&date=2020-01-06", "admin", nil, 200)["meta"].(map[string]any)["pagination"].(map[string]any)["total_records"] != float64(1) {
+		t.Fatal("attendance date filter")
+	}
+	request("GET", "/attendances?page=1&date=yesterday", "admin", nil, 422)
+
+	// Candidate → employee: only offer/hired candidates, once, atomically with the account.
+	hire := map[string]any{"name": "Candidate Test", "email": "candidate@example.test", "code": "A9", "department_id": 1, "position": "Engineer", "joined_on": "2026-12-01", "password": "CandidatePass123!"}
+	request("POST", fmt.Sprintf("/hr/recruitment/%d/convert", candidate), "admin", hire, 409)
+	request("PUT", fmt.Sprintf("/hr/recruitment/%d", candidate), "admin", map[string]any{"title": "Candidate Test", "status": "offer", "version": 1, "data": map[string]any{"email": "candidate@example.test", "position": "Engineer"}}, 200)
+	request("POST", fmt.Sprintf("/hr/recruitment/%d/convert", candidate), "other", hire, 404)
+	request("POST", fmt.Sprintf("/hr/recruitment/%d/convert", candidate), "admin", hire, 200)
+	request("POST", fmt.Sprintf("/hr/recruitment/%d/convert", candidate), "admin", hire, 409)
+	for _, c := range request("GET", "/hr/recruitment", "admin", nil, 200)["data"].([]any) {
+		if row := c.(map[string]any); row["id"] == float64(candidate) && (row["status"] != "hired" || row["employee_name"] != "Candidate Test") {
+			t.Fatalf("candidate not linked: %v", row)
+		}
+	}
+
+	// Uploads: type checked against content, employees read only published attachments.
+	upload := func(token, name string, body []byte, want int) map[string]any {
+		t.Helper()
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("file", name)
+		_, _ = fw.Write(body)
+		_ = mw.Close()
+		r := httptest.NewRequest("POST", "/api/v1/files", &buf)
+		r.Header.Set("Content-Type", mw.FormDataContentType())
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("upload %s: want %d, got %d: %s", name, want, w.Code, w.Body.String())
+		}
+		var v map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &v)
+		return v
+	}
+	pdf := []byte("%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n")
+	upload("staff", "policy.pdf", pdf, 403)
+	upload("admin", "policy.pdf", []byte("\x89PNG\r\n\x1a\n not a pdf"), 422)
+	upload("admin", "policy.exe", pdf, 422)
+	fileID := itemID(upload("admin", "../Kebijakan Cuti.pdf", pdf, 200))
+	download := func(token string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/files/%d", fileID), nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("download as %s: want %d, got %d", token, want, w.Code)
+		}
+		return w
+	}
+	download("admin", 200)
+	download("staff", 404) // not attached to a published document yet
+	download("other", 404)
+	request("POST", "/hr/documents", "admin", map[string]any{"title": "Both", "status": "published", "data": map[string]any{"file_id": fileID, "url": "https://example.com"}}, 422)
+	request("POST", "/hr/documents", "admin", map[string]any{"title": "Missing", "status": "published", "data": map[string]any{"file_id": 999999}}, 422)
+	request("POST", "/hr/documents", "admin", map[string]any{"title": "Leave policy", "status": "published", "data": map[string]any{"file_id": fileID}}, 200)
+	got := download("staff", 200)
+	if !strings.Contains(got.Header().Get("Content-Disposition"), `filename="Kebijakan Cuti.pdf"`) || got.Body.String() != string(pdf) {
+		t.Fatalf("download headers/body wrong: %v", got.Header())
+	}
+
+	// Company sign-up creates a tenant with defaults and signs its admin in.
+	if request("GET", "/auth/config", "", nil, 200)["data"].(map[string]any)["signup_enabled"] != true {
+		t.Fatal("signup flag missing")
+	}
+	signup := map[string]string{"company_name": "Gamma Corp", "company_slug": "Gamma Co", "name": "Gamma Admin", "email": "admin@gamma.test", "password": "GammaPassword123!"}
+	request("POST", "/auth/register", "", signup, 422)
+	signup["company_slug"] = "alpha"
+	request("POST", "/auth/register", "", signup, 409)
+	signup["company_slug"] = "gamma-co"
+	gamma := request("POST", "/auth/register", "", signup, 200)["data"].(map[string]any)["token"].(string)
+	if me := request("GET", "/auth/me", gamma, nil, 200)["data"].(map[string]any); me["company_name"] != "Gamma Corp" || me["role"] != "admin" {
+		t.Fatalf("new tenant admin wrong: %v", me)
+	}
+	if depts := request("GET", "/departments", gamma, nil, 200)["data"].([]any); len(depts) != 1 {
+		t.Fatalf("new tenant must start with one department: %v", depts)
+	}
+	if len(request("GET", "/employees", gamma, nil, 200)["data"].([]any)) != 0 {
+		t.Fatal("new tenant sees other tenants' employees")
+	}
+
+	// Password reset: same answer for unknown accounts, single-use token, sessions ended.
+	request("POST", "/auth/forgot-password", "", map[string]string{"company": "alpha", "email": "nobody@alpha.test"}, 200)
+	request("POST", "/auth/forgot-password", "", map[string]string{"company": "alpha", "email": "staff@alpha.test"}, 200)
+	var resets int
+	if err = isolated.Get(&resets, `SELECT count(*) FROM password_resets WHERE user_id=2 AND used_at IS NULL`); err != nil || resets != 1 {
+		t.Fatalf("reset token not stored: %d %v", resets, err)
+	}
+	resetToken := strings.Repeat("ab", 32)
+	if _, err = isolated.Exec(`UPDATE password_resets SET token_hash=$1 WHERE user_id=2`, service.HashToken(resetToken)); err != nil {
+		t.Fatal(err)
+	}
+	request("POST", "/auth/reset-password", "", map[string]string{"token": resetToken, "password": "short"}, 422)
+	request("POST", "/auth/reset-password", "", map[string]string{"token": resetToken, "password": "BrandNewPass123!"}, 200)
+	request("POST", "/auth/reset-password", "", map[string]string{"token": resetToken, "password": "BrandNewPass123!"}, 422)
+	request("GET", "/auth/me", "staff", nil, 401)
+	session(2, "staff")
 
 	request("POST", "/auth/logout", token, nil, 200)
 	request("GET", "/auth/me", token, nil, 401)

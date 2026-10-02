@@ -76,9 +76,9 @@ type fakeHRItems struct {
 	calls int
 }
 
-func (f *fakeHRItems) HRItems(_ context.Context, _ int64, _ string, s model.HRItemScope) ([]model.HRItem, error) {
+func (f *fakeHRItems) HRItems(_ context.Context, _ int64, _ string, s model.HRItemScope, _ model.ListFilter) ([]model.HRItem, int, error) {
 	f.scope, f.calls = s, f.calls+1
-	return nil, nil
+	return nil, 0, nil
 }
 
 func (f *fakeHRItems) SaveHRItem(_ context.Context, _, _ int64, _ string, _ int64, v model.HRItemInput) (int64, error) {
@@ -106,7 +106,7 @@ func TestHRItemReadScope(t *testing.T) {
 		{"admin everything", admin, "overtime", "company", true},
 	} {
 		repo := &fakeHRItems{}
-		if _, err := NewHRItemService(repo).HRItems(ctx, c.user, c.module); err != nil {
+		if _, err := NewHRItemService(repo).HRItems(ctx, c.user, c.module, dto.ListQuery{}); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if scopeID(repo.scope.EmployeeID) != c.scope || repo.scope.IncludeUnpublished != c.unpublished {
@@ -116,11 +116,11 @@ func TestHRItemReadScope(t *testing.T) {
 
 	repo := &fakeHRItems{}
 	svc := NewHRItemService(repo)
-	_, err := svc.HRItems(ctx, employee, "recruitment")
+	_, err := svc.HRItems(ctx, employee, "recruitment", dto.ListQuery{})
 	wantStatus(t, err, http.StatusForbidden)
-	_, err = svc.HRItems(ctx, orphan, "goals")
+	_, err = svc.HRItems(ctx, orphan, "goals", dto.ListQuery{})
 	wantStatus(t, err, http.StatusForbidden)
-	_, err = svc.HRItems(ctx, admin, "payroll")
+	_, err = svc.HRItems(ctx, admin, "payroll", dto.ListQuery{})
 	wantStatus(t, err, http.StatusNotFound)
 	if repo.calls != 0 {
 		t.Fatal("rejected request still reached the repository")
@@ -190,9 +190,9 @@ type fakeLeaves struct {
 	scope *int64
 }
 
-func (f *fakeLeaves) Leaves(_ context.Context, _ int64, employeeID *int64) ([]model.Leave, error) {
+func (f *fakeLeaves) Leaves(_ context.Context, _ int64, employeeID *int64, _ model.ListFilter) ([]model.Leave, int, error) {
 	f.scope = employeeID
-	return nil, nil
+	return nil, 0, nil
 }
 
 type fakePayroll struct {
@@ -213,7 +213,7 @@ func TestEmployeesOnlyReadOwnLeavesAndPayslips(t *testing.T) {
 		user *model.User
 		want string
 	}{{employee, "employee"}, {admin, "company"}} {
-		if _, err := NewLeaveService(leaves).Leaves(ctx, c.user); err != nil || scopeID(leaves.scope) != c.want {
+		if _, err := NewLeaveService(leaves).Leaves(ctx, c.user, dto.ListQuery{}); err != nil || scopeID(leaves.scope) != c.want {
 			t.Fatalf("%s leaves scope = %s", c.user.Role, scopeID(leaves.scope))
 		}
 		if _, err := NewPayrollService(payroll).Payslips(ctx, c.user, 0); err != nil || scopeID(payroll.scope) != c.want {
@@ -225,6 +225,7 @@ func TestEmployeesOnlyReadOwnLeavesAndPayslips(t *testing.T) {
 }
 
 type fakeAuth struct {
+	repository.AuthRepository
 	user        *model.User
 	lookupErr   error
 	sessionHash string
@@ -258,7 +259,7 @@ func TestSessionsStoreOnlyTokenHashes(t *testing.T) {
 	ctx := context.Background()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("CorrectHorse123"), bcrypt.MinCost)
 	repo := &fakeAuth{user: &model.User{ID: 1, PasswordHash: string(hash)}}
-	svc := NewAuthService(repo)
+	svc := NewAuthService(repo, AuthOptions{})
 
 	_, _, err := svc.Login(ctx, dto.Login{Company: "alpha", Email: "a@b.test", Password: "wrong"})
 	wantStatus(t, err, http.StatusUnauthorized)
@@ -281,7 +282,7 @@ func TestSessionsStoreOnlyTokenHashes(t *testing.T) {
 		t.Fatalf("a database outage must not look like an expired session: %v", err)
 	}
 
-	unknown := NewAuthService(&fakeAuth{})
+	unknown := NewAuthService(&fakeAuth{}, AuthOptions{})
 	_, _, err = unknown.Login(ctx, dto.Login{Company: "alpha", Email: "ghost@b.test", Password: "x"})
 	wantStatus(t, err, http.StatusUnauthorized)
 }

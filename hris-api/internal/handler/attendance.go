@@ -16,8 +16,9 @@ func NewAttendanceHandler(svc *service.AttendanceService) *AttendanceHandler {
 }
 
 func (h *AttendanceHandler) Attendances(c *echo.Context) error {
-	v, err := h.svc.Attendances(c.Request().Context(), middleware.User(c))
-	return respond(c, v, err)
+	return listed(c, func(q dto.ListQuery) (service.Page[model.Attendance], error) {
+		return h.svc.Attendances(c.Request().Context(), middleware.User(c), q)
+	})
 }
 
 func (h *AttendanceHandler) Today(c *echo.Context) error {

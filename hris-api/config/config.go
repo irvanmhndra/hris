@@ -14,6 +14,24 @@ type Config struct {
 	// means same-origin only: the SPA reaches /api through a reverse proxy.
 	AllowedOrigins []string
 	DB             DBConfig
+	// SignupEnabled allows anyone to register a new company (SIGNUP_ENABLED).
+	SignupEnabled bool
+	// Portal URLs used in emailed links, e.g. password resets.
+	AdminURL    string
+	EmployeeURL string
+	// UploadDir stores uploaded files on local disk.
+	UploadDir string
+	SMTP      SMTPConfig
+}
+
+// SMTPConfig sends email. Without a host, emails are written to the log
+// (development only: the log then contains reset links).
+type SMTPConfig struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	From     string
 }
 
 type DBConfig struct {
@@ -31,6 +49,17 @@ func Load() Config {
 			MaxOpenConns:    envInt("DB_MAX_OPEN_CONNS", 20),
 			MaxIdleConns:    envInt("DB_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: envDuration("DB_CONN_MAX_LIFETIME", 30*time.Minute),
+		},
+		SignupEnabled: os.Getenv("SIGNUP_ENABLED") == "true",
+		AdminURL:      strings.TrimRight(env("ADMIN_URL", "http://127.0.0.1:5180"), "/"),
+		EmployeeURL:   strings.TrimRight(env("EMPLOYEE_URL", "http://127.0.0.1:5181"), "/"),
+		UploadDir:     env("UPLOAD_DIR", "data/uploads"),
+		SMTP: SMTPConfig{
+			Host:     os.Getenv("SMTP_HOST"),
+			Port:     envInt("SMTP_PORT", 587),
+			Username: os.Getenv("SMTP_USERNAME"),
+			Password: os.Getenv("SMTP_PASSWORD"),
+			From:     env("MAIL_FROM", "People HRIS <no-reply@localhost>"),
 		},
 	}
 }

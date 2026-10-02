@@ -85,6 +85,24 @@ func (r *employeeRepository) SaveEmployee(ctx context.Context, companyID, id int
 	defer rollback(tx)
 
 	isNew := id == 0
+	if isNew && v.CandidateID != nil {
+		var candidate struct {
+			Status     string `db:"status"`
+			EmployeeID *int64 `db:"employee_id"`
+		}
+		if err = tx.GetContext(ctx, &candidate, `
+			SELECT status, employee_id FROM hr_items
+			WHERE company_id = $1 AND id = $2 AND module = 'recruitment' FOR UPDATE`,
+			companyID, *v.CandidateID); err != nil {
+			return 0, err
+		}
+		if candidate.EmployeeID != nil {
+			return 0, apperror.Conflict("Kandidat sudah menjadi karyawan")
+		}
+		if candidate.Status != "offer" && candidate.Status != "hired" {
+			return 0, apperror.Conflict("Hanya kandidat berstatus offer atau hired yang dapat dijadikan karyawan")
+		}
+	}
 	if isNew {
 		err = tx.QueryRowxContext(ctx, `
 			INSERT INTO employees (company_id, code, name, email, department_id, position, status, joined_on, left_on, manager_id, shift_id)
@@ -116,6 +134,19 @@ func (r *employeeRepository) SaveEmployee(ctx context.Context, companyID, id int
 		}
 		if rowsAffected(res) == 0 {
 			return 0, sql.ErrNoRows
+		}
+	}
+
+	if isNew && v.CandidateID != nil {
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE hr_items SET employee_id = $3, status = 'hired', version = version + 1, updated_at = now()
+			WHERE company_id = $1 AND id = $2`,
+			companyID, *v.CandidateID, id); err != nil {
+			return 0, err
+		}
+		if err = audit(ctx, tx, companyID, v.ActorID, "hire", "recruitment", *v.CandidateID,
+			"Kandidat dijadikan karyawan "+v.Code); err != nil {
+			return 0, err
 		}
 	}
 

@@ -21,17 +21,23 @@ const attendanceFields = `a.id, a.employee_id, e.name, a.date::text, a.check_in,
 	a.shift_name, a.scheduled_start, a.scheduled_end, a.late_minutes, a.early_leave_minutes,
 	a.check_in_distance_m, a.check_out_distance_m`
 
-func (r *attendanceRepository) Attendances(ctx context.Context, companyID int64, employeeID *int64) ([]model.Attendance, error) {
-	v := []model.Attendance{}
-	err := r.db.SelectContext(ctx, &v, `
-		SELECT `+attendanceFields+`
+func (r *attendanceRepository) Attendances(ctx context.Context, companyID int64, employeeID *int64, f model.ListFilter) ([]model.Attendance, int, error) {
+	const where = `
 		FROM attendances a
 		JOIN employees e ON e.id = a.employee_id
 		WHERE a.company_id = $1 AND ($2::bigint IS NULL OR a.employee_id = $2)
+		  AND ($3 = '' OR a.date = NULLIF($3, '')::date)`
+	var total int
+	if err := r.db.GetContext(ctx, &total, `SELECT count(*) `+where, companyID, employeeID, f.Date); err != nil {
+		return nil, 0, err
+	}
+	v := []model.Attendance{}
+	err := r.db.SelectContext(ctx, &v, `
+		SELECT `+attendanceFields+where+`
 		ORDER BY a.date DESC, a.check_in DESC
-		LIMIT 100`,
-		companyID, employeeID)
-	return v, err
+		LIMIT $4 OFFSET $5`,
+		companyID, employeeID, f.Date, limitOf(f), f.Offset)
+	return v, total, err
 }
 
 // ScheduleSource loads calendars, shifts, assignments, and locations for the

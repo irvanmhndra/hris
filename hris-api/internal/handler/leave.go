@@ -80,8 +80,9 @@ func (h *LeaveHandler) SetAllowance(c *echo.Context) error {
 }
 
 func (h *LeaveHandler) Leaves(c *echo.Context) error {
-	v, err := h.svc.Leaves(c.Request().Context(), middleware.User(c))
-	return respond(c, v, err)
+	return listed(c, func(q dto.ListQuery) (service.Page[model.Leave], error) {
+		return h.svc.Leaves(c.Request().Context(), middleware.User(c), q)
+	})
 }
 
 func (h *LeaveHandler) CreateLeave(c *echo.Context) error {

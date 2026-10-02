@@ -19,6 +19,9 @@ type AuthRepository interface {
 	CreateSession(ctx context.Context, userID int64, tokenHash string) error
 	SessionUser(ctx context.Context, tokenHash string) (*model.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
+	CreatePasswordReset(ctx context.Context, companySlug, email, tokenHash string) (*model.User, error)
+	ResetPassword(ctx context.Context, tokenHash, passwordHash string) error
+	Register(ctx context.Context, v model.RegisterInput) (*model.User, error)
 }
 
 type EmployeeRepository interface {
@@ -31,7 +34,7 @@ type EmployeeRepository interface {
 }
 
 type AttendanceRepository interface {
-	Attendances(ctx context.Context, companyID int64, employeeID *int64) ([]model.Attendance, error)
+	Attendances(ctx context.Context, companyID int64, employeeID *int64, f model.ListFilter) ([]model.Attendance, int, error)
 	Clock(ctx context.Context, companyID, employeeID int64, v model.ClockInput) error
 	ScheduleSource(ctx context.Context, companyID int64, employeeID *int64, from, to string, withRecords bool) (model.ScheduleSource, error)
 	Shifts(ctx context.Context, companyID int64) ([]model.Shift, error)
@@ -50,7 +53,7 @@ type LeaveRepository interface {
 	DeleteHoliday(ctx context.Context, companyID, actorID, id int64) error
 	Balances(ctx context.Context, companyID int64, employeeID *int64, year int) ([]model.Balance, error)
 	SetAllowance(ctx context.Context, companyID, actorID, employeeID int64, year, allowance int) error
-	Leaves(ctx context.Context, companyID int64, employeeID *int64) ([]model.Leave, error)
+	Leaves(ctx context.Context, companyID int64, employeeID *int64, f model.ListFilter) ([]model.Leave, int, error)
 	CreateLeave(ctx context.Context, companyID, employeeID, actorID int64, v model.LeaveInput) error
 	ReviewLeave(ctx context.Context, companyID, leaveID, reviewerID int64, status string) error
 	CancelLeave(ctx context.Context, companyID, employeeID, actorID, leaveID int64) error
@@ -62,7 +65,7 @@ type ProfileRepository interface {
 }
 
 type HRItemRepository interface {
-	HRItems(ctx context.Context, companyID int64, module string, scope model.HRItemScope) ([]model.HRItem, error)
+	HRItems(ctx context.Context, companyID int64, module string, scope model.HRItemScope, f model.ListFilter) ([]model.HRItem, int, error)
 	SaveHRItem(ctx context.Context, companyID, actorID int64, module string, id int64, v model.HRItemInput) (int64, error)
 	ActHRItem(ctx context.Context, companyID, actorID int64, module string, id int64, scope model.HRItemScope, v model.HRActionInput) error
 }
@@ -93,6 +96,11 @@ type ApprovalRepository interface {
 	TeamApprovals(ctx context.Context, companyID, managerID int64) ([]model.TeamRequest, error)
 	ManagerReviewLeave(ctx context.Context, companyID, managerID, actorID, leaveID int64, approve bool, note string) error
 	ManagerReviewHRItem(ctx context.Context, companyID, managerID, actorID int64, module string, id int64, approve bool, note string, version int) error
+}
+
+type FileRepository interface {
+	CreateFile(ctx context.Context, companyID, actorID int64, f model.File) (model.File, error)
+	File(ctx context.Context, companyID, id int64, employeeOnly bool) (model.File, error)
 }
 
 type AuditRepository interface {

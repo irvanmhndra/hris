@@ -97,4 +97,7 @@ type HRData struct {
 	CheckIn  string `json:"check_in,omitempty"`
 	CheckOut string `json:"check_out,omitempty"`
 	Original string `json:"original,omitempty"`
+	// FileID attaches an uploaded file; FileName is filled in by the server.
+	FileID   int64  `json:"file_id,omitempty"`
+	FileName string `json:"file_name,omitempty"`
 }

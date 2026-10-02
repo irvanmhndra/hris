@@ -57,11 +57,16 @@ func itemScope(u *model.User, module string) model.HRItemScope {
 	return s
 }
 
-func (s *HRItemService) HRItems(ctx context.Context, u *model.User, module string) ([]model.HRItem, error) {
+func (s *HRItemService) HRItems(ctx context.Context, u *model.User, module string, q dto.ListQuery) (Page[model.HRItem], error) {
 	if err := moduleAccess(u, module); err != nil {
-		return nil, err
+		return Page[model.HRItem]{}, err
 	}
-	return s.repo.HRItems(ctx, u.CompanyID, module, itemScope(u, module))
+	out, f, err := listFilter[model.HRItem](q, 0, modules[module]...)
+	if err != nil {
+		return out, err
+	}
+	out.Items, out.Total, err = s.repo.HRItems(ctx, u.CompanyID, module, itemScope(u, module), f)
+	return out, err
 }
 
 // ValidateHRItem normalises and validates an item. Data is decoded into the
@@ -91,11 +96,24 @@ func ValidateHRItem(module string, v *dto.HRItem) error {
 		return apperror.Invalid("Detail terlalu panjang")
 	}
 
+	if module != "documents" && module != "announcements" {
+		data.FileID = 0
+	}
+	data.FileName = ""
 	switch module {
 	case "documents":
-		link, err := url.Parse(data.URL)
-		if err != nil || link.Scheme != "https" || link.Host == "" || link.User != nil {
-			return apperror.Invalid("Dokumen harus menggunakan tautan HTTPS tanpa kredensial")
+		if data.FileID < 0 || (data.FileID > 0 && data.URL != "") {
+			return apperror.Invalid("Pilih salah satu: file unggahan atau tautan HTTPS")
+		}
+		if data.FileID == 0 {
+			link, err := url.Parse(data.URL)
+			if err != nil || link.Scheme != "https" || link.Host == "" || link.User != nil {
+				return apperror.Invalid("Dokumen harus berupa file unggahan atau tautan HTTPS tanpa kredensial")
+			}
+		}
+	case "announcements":
+		if data.FileID < 0 {
+			return apperror.Invalid("Lampiran tidak valid")
 		}
 	case "assets":
 		data.Code = strings.TrimSpace(data.Code)

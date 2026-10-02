@@ -30,6 +30,17 @@ services:
     environment:
       DATABASE_URL: postgres://hris:hris_local@db:5432/hris?sslmode=disable
       HTTP_ADDR: :8088
+      UPLOAD_DIR: /data/uploads
+      SIGNUP_ENABLED: ${SIGNUP_ENABLED:-false}
+      ADMIN_URL: ${ADMIN_URL:-http://127.0.0.1:5180}
+      EMPLOYEE_URL: ${EMPLOYEE_URL:-http://127.0.0.1:5181}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-People HRIS <no-reply@localhost>}
+    volumes:
+      - hris_uploads:/data/uploads
     ports: ["127.0.0.1:8088:8088"]
     depends_on:
       db:
@@ -38,3 +49,4 @@ services:
         condition: service_completed_successfully
 volumes:
   hris_data:
+  hris_uploads:
