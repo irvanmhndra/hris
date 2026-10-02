@@ -1,8 +1,17 @@
 -- Optional fictitious demo data. Existing records and salary configuration are preserved.
-INSERT INTO salary_profiles(company_id,employee_id,basic_salary,allowance,deduction,note)
-SELECT e.company_id,e.id,8000000+((row_number() OVER(ORDER BY e.id)-1)%5)*500000,750000,250000,'Data demo fiktif. Potongan ilustratif, bukan perhitungan pajak/BPJS.'
+INSERT INTO salary_profiles(company_id,employee_id,basic_salary,note,ptkp_status)
+SELECT e.company_id,e.id,8000000+((row_number() OVER(ORDER BY e.id)-1)%5)*500000,'Data demo fiktif.',
+       (ARRAY['TK/0','K/0','K/1','TK/1','K/2'])[((row_number() OVER(ORDER BY e.id)-1)%5)+1]
 FROM employees e JOIN companies c ON c.id=e.company_id WHERE c.slug='demo'
 ON CONFLICT DO NOTHING;
+-- Components only for profiles that have none yet, so reruns add nothing.
+INSERT INTO salary_components(company_id,employee_id,kind,name,amount,fixed,taxable,position)
+SELECT s.company_id,s.employee_id,v.kind,v.name,v.amount,v.fixed,true,v.position
+FROM salary_profiles s JOIN companies c ON c.id=s.company_id AND c.slug='demo'
+CROSS JOIN (VALUES ('allowance','Tunjangan jabatan',500000,true,0),('allowance','Uang makan',250000,false,1),('deduction','Iuran koperasi',100000,false,2))
+ AS v(kind,name,amount,fixed,position)
+WHERE s.note='Data demo fiktif.'
+  AND NOT EXISTS (SELECT 1 FROM salary_components x WHERE x.company_id=s.company_id AND x.employee_id=s.employee_id);
 
 INSERT INTO hr_items(company_id,module,employee_id,title,description,status,due_date,data,created_by)
 SELECT c.id,v.module,CASE WHEN v.module IN ('onboarding','assets','goals') THEN e.id ELSE NULL END,v.title,v.description,v.status,

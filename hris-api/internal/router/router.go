@@ -51,6 +51,8 @@ func Setup(e *echo.Echo, h *Handlers, authn middleware.Authenticator) {
 	admin.GET("/audit-logs", h.Audit.AuditLogs)
 	admin.GET("/salaries", h.Payroll.Salaries)
 	admin.PUT("/salaries/:id", h.Payroll.SaveSalary)
+	admin.GET("/payroll/settings", h.Payroll.Settings)
+	admin.PUT("/payroll/settings", h.Payroll.SaveSettings)
 	admin.GET("/payroll", h.Payroll.PayrollRuns)
 	admin.POST("/payroll", h.Payroll.CreatePayroll)
 	admin.GET("/payroll/:id/slips", h.Payroll.Payslips)

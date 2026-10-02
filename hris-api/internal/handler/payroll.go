@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/irvanmhndra/hris-api/internal/dto"
 	"github.com/irvanmhndra/hris-api/internal/middleware"
+	"github.com/irvanmhndra/hris-api/internal/model"
 	"github.com/irvanmhndra/hris-api/internal/service"
 	"github.com/irvanmhndra/hris-api/pkg/httputil"
 	"github.com/labstack/echo/v5"
@@ -37,13 +38,11 @@ func (h *PayrollHandler) PayrollRuns(c *echo.Context) error {
 }
 
 func (h *PayrollHandler) CreatePayroll(c *echo.Context) error {
-	var v struct {
-		Period string `json:"period"`
-	}
+	var v dto.CreatePayroll
 	if err := bind(c, &v); err != nil {
 		return httputil.Error(c, err)
 	}
-	id, err := h.svc.CreatePayroll(c.Request().Context(), middleware.User(c), v.Period)
+	id, err := h.svc.CreatePayroll(c.Request().Context(), middleware.User(c), v)
 	return respond(c, map[string]int64{"id": id}, err)
 }
 
@@ -57,12 +56,25 @@ func (h *PayrollHandler) Payslips(c *echo.Context) error {
 	return respond(c, v, err)
 }
 
+func (h *PayrollHandler) Settings(c *echo.Context) error {
+	v, err := h.svc.Settings(c.Request().Context(), middleware.User(c).CompanyID)
+	return respond(c, v, err)
+}
+
+func (h *PayrollHandler) SaveSettings(c *echo.Context) error {
+	var v model.PayrollSettings
+	if err := bind(c, &v); err != nil {
+		return httputil.Error(c, err)
+	}
+	return respond(c, nil, h.svc.SaveSettings(c.Request().Context(), middleware.User(c), v))
+}
+
 func (h *PayrollHandler) SavePayslip(c *echo.Context) error {
 	id, err := pathID(c)
 	if err != nil {
 		return httputil.Error(c, err)
 	}
-	var v dto.Salary
+	var v dto.Payslip
 	if err = bind(c, &v); err != nil {
 		return httputil.Error(c, err)
 	}

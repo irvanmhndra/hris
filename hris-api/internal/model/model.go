@@ -23,16 +23,17 @@ type Department struct {
 	Count int    `db:"count" json:"count"`
 }
 type Employee struct {
-	ID           int64  `db:"id" json:"id"`
-	CompanyID    int64  `db:"company_id" json:"company_id"`
-	Code         string `db:"code" json:"code"`
-	Name         string `db:"name" json:"name"`
-	Email        string `db:"email" json:"email"`
-	DepartmentID int64  `db:"department_id" json:"department_id"`
-	Department   string `db:"department" json:"department"`
-	Position     string `db:"position" json:"position"`
-	Status       string `db:"status" json:"status"`
-	JoinedOn     string `db:"joined_on" json:"joined_on"`
+	ID           int64   `db:"id" json:"id"`
+	CompanyID    int64   `db:"company_id" json:"company_id"`
+	Code         string  `db:"code" json:"code"`
+	Name         string  `db:"name" json:"name"`
+	Email        string  `db:"email" json:"email"`
+	DepartmentID int64   `db:"department_id" json:"department_id"`
+	Department   string  `db:"department" json:"department"`
+	Position     string  `db:"position" json:"position"`
+	Status       string  `db:"status" json:"status"`
+	JoinedOn     string  `db:"joined_on" json:"joined_on"`
+	LeftOn       *string `db:"left_on" json:"left_on"`
 }
 type Attendance struct {
 	ID         int64      `db:"id" json:"id"`

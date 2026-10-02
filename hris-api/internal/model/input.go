@@ -14,6 +14,9 @@ type EmployeeInput struct {
 	Position     string
 	Status       string
 	JoinedOn     string
+	// LeftOn is the last working day of an inactive employee; empty keeps the
+	// stored date (or today on deactivation).
+	LeftOn string
 	// PasswordHash is empty when the password is unchanged.
 	PasswordHash string
 }
@@ -52,11 +55,15 @@ type HRActionInput struct {
 }
 
 type SalaryInput struct {
-	BasicSalary int64
-	Allowance   int64
-	Deduction   int64
-	Note        string
-	Version     int
+	BasicSalary         int64
+	PTKPStatus          string
+	TaxMethod           string
+	BPJSKesehatan       bool
+	BPJSKetenagakerjaan bool
+	BPJSPensiun         bool
+	OvertimeEligible    bool
+	Note                string
+	Components          []SalaryComponent
 }
 
 // HRItemScope restricts which hr_items a caller may see or act on.

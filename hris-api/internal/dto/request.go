@@ -13,6 +13,7 @@ type Employee struct {
 	Position     string `json:"position"`
 	Status       string `json:"status"`
 	JoinedOn     string `json:"joined_on"`
+	LeftOn       string `json:"left_on"`
 	Password     string `json:"password"`
 }
 

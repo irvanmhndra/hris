@@ -64,11 +64,19 @@ type PayrollRepository interface {
 	Salaries(ctx context.Context, companyID int64) ([]model.Salary, error)
 	SaveSalary(ctx context.Context, companyID, actorID, employeeID int64, v model.SalaryInput) error
 	PayrollRuns(ctx context.Context, companyID int64) ([]model.PayrollRun, error)
-	CreatePayroll(ctx context.Context, companyID, actorID int64, periodStart string) (int64, error)
+	Settings(ctx context.Context, companyID int64) (model.PayrollSettings, error)
+	SaveSettings(ctx context.Context, companyID, actorID int64, v model.PayrollSettings) error
+	// CreatePayroll reads the run's inputs in one snapshot, calls build to
+	// calculate the slips, and stores the run.
+	CreatePayroll(ctx context.Context, companyID, actorID int64, periodStart string, thrDate *string,
+		build func(model.PayrollSource) ([]model.PayrollEntryDraft, error)) (int64, error)
 	// Payslips lists slips of one run (runID > 0) or all runs. With employeeID
 	// set, only that employee's finalized or paid slips are returned.
 	Payslips(ctx context.Context, companyID int64, employeeID *int64, runID int64) ([]model.Payslip, error)
-	SavePayslip(ctx context.Context, companyID, actorID, entryID int64, v model.SalaryInput) error
+	// SavePayslip locks a draft slip, calls build with its calculation
+	// context, and stores the recalculated slip.
+	SavePayslip(ctx context.Context, companyID, actorID, entryID int64, version int, note string,
+		build func(model.PayslipContext) (model.PayrollEntryDraft, error)) error
 	PayrollAction(ctx context.Context, companyID, actorID, runID int64, action, reference string) error
 }
 

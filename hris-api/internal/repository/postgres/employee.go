@@ -64,7 +64,7 @@ func (r *employeeRepository) Employees(ctx context.Context, companyID int64, f m
 	v := []model.Employee{}
 	err := r.db.SelectContext(ctx, &v, `
 		SELECT e.id, e.company_id, e.code, e.name, e.email, e.department_id,
-		       d.name AS department, e.position, e.status, e.joined_on::text
+		       d.name AS department, e.position, e.status, e.joined_on::text, e.left_on::text
 		`+employeeFilterSQL+`
 		ORDER BY e.name, e.id
 		LIMIT $5 OFFSET $6`,
@@ -86,10 +86,10 @@ func (r *employeeRepository) SaveEmployee(ctx context.Context, companyID, id int
 	isNew := id == 0
 	if isNew {
 		err = tx.QueryRowxContext(ctx, `
-			INSERT INTO employees (company_id, code, name, email, department_id, position, status, joined_on)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			INSERT INTO employees (company_id, code, name, email, department_id, position, status, joined_on, left_on)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::date, CASE WHEN $7 = 'inactive' THEN COALESCE(NULLIF($9, '')::date, NULL, GREATEST((now() AT TIME ZONE 'Asia/Jakarta')::date, $8::date)) END)
 			RETURNING id`,
-			companyID, v.Code, v.Name, v.Email, v.DepartmentID, v.Position, v.Status, v.JoinedOn).Scan(&id)
+			companyID, v.Code, v.Name, v.Email, v.DepartmentID, v.Position, v.Status, v.JoinedOn, v.LeftOn).Scan(&id)
 		if err != nil {
 			return 0, err
 		}
@@ -103,9 +103,10 @@ func (r *employeeRepository) SaveEmployee(ctx context.Context, companyID, id int
 	} else {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE employees
-			SET code = $3, name = $4, email = $5, department_id = $6, position = $7, status = $8, joined_on = $9
+			SET code = $3, name = $4, email = $5, department_id = $6, position = $7, status = $8, joined_on = $9::date,
+			    left_on = CASE WHEN $8 = 'inactive' THEN COALESCE(NULLIF($10, '')::date, left_on, GREATEST((now() AT TIME ZONE 'Asia/Jakarta')::date, $9::date)) END
 			WHERE company_id = $1 AND id = $2`,
-			companyID, id, v.Code, v.Name, v.Email, v.DepartmentID, v.Position, v.Status, v.JoinedOn)
+			companyID, id, v.Code, v.Name, v.Email, v.DepartmentID, v.Position, v.Status, v.JoinedOn, v.LeftOn)
 		if err != nil {
 			return 0, err
 		}

@@ -240,15 +240,29 @@ func TestHRISWorkflow(t *testing.T) {
 		t.Fatal("approved correction not applied")
 	}
 
-	// Payroll snapshots, locking, per-employee confidentiality, and manual payment lifecycle.
+	// Payroll calculation, snapshots, locking, per-employee confidentiality, and manual payment lifecycle.
 	request("GET", "/salaries", "staff", nil, 403)
 	request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 409)
-	salary := map[string]any{"basic_salary": 10000000, "allowance": 1000000, "deduction": 500000, "note": "Manual deductions verified"}
+	salary := map[string]any{
+		"basic_salary": 10000000, "ptkp_status": "TK/0", "tax_method": "gross",
+		"bpjs_kesehatan": true, "bpjs_ketenagakerjaan": true, "bpjs_pensiun": true, "overtime_eligible": true,
+		"note": "Verified", "components": []map[string]any{
+			{"kind": "allowance", "name": "Tunjangan jabatan", "amount": 1000000, "fixed": true, "taxable": true},
+			{"kind": "deduction", "name": "Koperasi", "amount": 500000},
+		},
+	}
 	request("PUT", "/salaries/2", "admin", salary, 404)
 	request("PUT", "/salaries/1", "admin", salary, 200)
-	request("PUT", fmt.Sprintf("/salaries/%.0f", created), "admin", salary, 200)
+	manual := map[string]any{"basic_salary": 10000000, "ptkp_status": "TK/0", "tax_method": "none", "components": salary["components"]}
+	request("PUT", fmt.Sprintf("/salaries/%.0f", created), "admin", manual, 200)
 	run := itemID(request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 200))
 	request("POST", "/payroll", "admin", map[string]string{"period": "2026-11"}, 409)
+	request("POST", "/payroll", "admin", map[string]string{"period": "2026-12"}, 409) // November still draft
+	request("PUT", "/payroll/settings", "admin", map[string]any{"jkk_rate": 25, "jp_wage_cap": 10547400, "kes_wage_cap": 12000000}, 422)
+	request("PUT", "/payroll/settings", "admin", map[string]any{"jkk_rate": 54, "jp_wage_cap": 10547400, "kes_wage_cap": 12000000}, 200)
+	if request("GET", "/payroll/settings", "admin", nil, 200)["data"].(map[string]any)["jkk_rate"] != float64(54) {
+		t.Fatal("payroll settings not saved")
+	}
 	if len(request("GET", "/payslips", "staff", nil, 200)["data"].([]any)) != 0 {
 		t.Fatal("draft payslip leaked")
 	}
@@ -257,20 +271,36 @@ func TestHRISWorkflow(t *testing.T) {
 		t.Fatal("payroll employee snapshot incomplete")
 	}
 	slip := payrollRows[0].(map[string]any)
-	if slip["net"] != float64(10500000) {
-		t.Fatal("wrong net salary")
+	codes := map[string]float64{}
+	var inputs []map[string]any
+	for _, l := range slip["lines"].([]any) {
+		line := l.(map[string]any)
+		codes[line["code"].(string)] += line["amount"].(float64)
+		if c := line["code"]; c == "BASIC" || c == "ALLOWANCE" || c == "OVERTIME" || c == "DEDUCTION" {
+			inputs = append(inputs, line)
+		}
 	}
-	salary["version"] = 1
-	salary["allowance"] = 1500000
-	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 200)
-	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 409)
+	// Rp11jt fixed wage; 2h weekday overtime = 3.5h × 11jt/173; BPJS on 11jt
+	// (JP capped); TER A 4% on gross incl. employer Kes/JKK/JKM premiums.
+	if codes["OVERTIME"] != 222543 || codes["BPJS_KES_EE"] != 110000 || codes["JP_EE"] != 105474 ||
+		codes["JKK"] != 26400 || slip["pph21"] != float64(468877) || slip["net"] != float64(9818192) {
+		t.Fatalf("wrong payroll calculation: %v net %v pph21 %v", codes, slip["net"], slip["pph21"])
+	}
+	if payrollRows[1].(map[string]any)["net"] != float64(10500000) {
+		t.Fatal("manual-tax slip must not add BPJS or PPh 21")
+	}
+	adjust := map[string]any{"version": 1, "note": "Bonus", "lines": append(inputs,
+		map[string]any{"kind": "earning", "code": "ADJUSTMENT", "name": "Bonus proyek", "amount": 1000000, "taxable": true})}
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", map[string]any{"version": 1, "lines": []map[string]any{{"kind": "deduction", "code": "PPH21", "name": "PPh", "amount": 1}}}, 422)
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", adjust, 200)
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", adjust, 409)
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "other", map[string]string{"action": "finalize"}, 404)
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "finalize"}, 200)
-	salary["version"] = 2
-	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", salary, 409)
+	adjust["version"] = 2
+	request("PUT", fmt.Sprintf("/payroll/slips/%.0f", slip["id"]), "admin", adjust, 409)
 	ownSlips := request("GET", "/payslips", "staff", nil, 200)["data"].([]any)
-	if len(ownSlips) != 1 || ownSlips[0].(map[string]any)["employee_id"] != float64(1) {
-		t.Fatal("payslip ownership failed")
+	if len(ownSlips) != 1 || ownSlips[0].(map[string]any)["employee_id"] != float64(1) || ownSlips[0].(map[string]any)["pph21"].(float64) <= 468877 {
+		t.Fatal("payslip ownership or bonus recalculation failed")
 	}
 	if len(request("GET", "/payslips", "otherstaff", nil, 200)["data"].([]any)) != 0 {
 		t.Fatal("payslip tenant leak")
@@ -278,6 +308,18 @@ func TestHRISWorkflow(t *testing.T) {
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "paid"}, 422)
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "paid", "reference": "BANK-BATCH-001"}, 200)
 	request("PATCH", fmt.Sprintf("/payroll/%d/action", run), "admin", map[string]string{"action": "void"}, 409)
+	// December settles the year with Pasal 17; paid overtime is not paid twice.
+	december := itemID(request("POST", "/payroll", "admin", map[string]any{"period": "2026-12", "thr_date": "2026-12-25"}, 200))
+	decSlip := request("GET", fmt.Sprintf("/payroll/%d/slips", december), "admin", nil, 200)["data"].([]any)[0].(map[string]any)
+	for _, l := range decSlip["lines"].([]any) {
+		if l.(map[string]any)["code"] == "OVERTIME" {
+			t.Fatal("overtime paid twice")
+		}
+	}
+	if decSlip["final_period"] != true || decSlip["pph21"] == float64(0) {
+		t.Fatalf("December must use the annual calculation: %v", decSlip)
+	}
+	request("PATCH", fmt.Sprintf("/payroll/%d/action", december), "admin", map[string]string{"action": "void"}, 200)
 	request("GET", "/audit-logs", "staff", nil, 403)
 	if len(request("GET", "/audit-logs", "admin", nil, 200)["data"].([]any)) < 15 {
 		t.Fatal("audit trail incomplete")

@@ -74,11 +74,20 @@ func ValidateEmployee(v *dto.Employee, create bool) error {
 	if err != nil || addr.Address != v.Email {
 		return apperror.Invalid("Email tidak valid")
 	}
-	if _, err = time.Parse("2006-01-02", v.JoinedOn); err != nil {
+	joined, err := time.Parse("2006-01-02", v.JoinedOn)
+	if err != nil {
 		return apperror.Invalid("Tanggal bergabung tidak valid")
 	}
 	if v.Status != "active" && v.Status != "inactive" {
 		return apperror.Invalid("Status tidak valid")
+	}
+	if v.Status == "active" {
+		v.LeftOn = ""
+	} else if v.LeftOn != "" {
+		left, err := time.Parse("2006-01-02", v.LeftOn)
+		if err != nil || left.Before(joined) {
+			return apperror.Invalid("Tanggal keluar harus valid dan tidak sebelum tanggal bergabung")
+		}
 	}
 	// A new portal account always needs a password; on edit it is optional (reset).
 	if (create || v.Password != "") && (len(v.Password) < 12 || len(v.Password) > 72) {
@@ -93,7 +102,7 @@ func (s *EmployeeService) SaveEmployee(ctx context.Context, companyID, id int64,
 	}
 	in := model.EmployeeInput{
 		Code: v.Code, Name: v.Name, Email: v.Email, DepartmentID: v.DepartmentID,
-		Position: v.Position, Status: v.Status, JoinedOn: v.JoinedOn,
+		Position: v.Position, Status: v.Status, JoinedOn: v.JoinedOn, LeftOn: v.LeftOn,
 	}
 	if v.Password != "" {
 		h, err := bcrypt.GenerateFromPassword([]byte(v.Password), bcrypt.DefaultCost)
