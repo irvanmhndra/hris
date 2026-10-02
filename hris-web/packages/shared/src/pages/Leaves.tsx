@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Check, Plus, X } from "lucide-react";
 import { useState } from "react";
 import {
@@ -10,16 +10,21 @@ import {
   kinds,
   Loading,
   Modal,
-  useData,
+  Pager,
   today,
 } from "../components/common";
 import { Heading } from "../components/Heading";
-import { api } from "../services/api";
+import { api, apiPage, query } from "../services/api";
 import { BalanceSummary } from "./HRSettings";
 import type { Leave } from "../types";
 export function Leaves({ employee }: { employee: boolean }) {
-  const q = useData<Leave[]>("/leaves");
   const [filter, setFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const q = useQuery({
+    queryKey: ["/leaves", "page", page, filter],
+    queryFn: () =>
+      apiPage<Leave>(`/leaves${query({ page, per_page: 20, status: filter })}`),
+  });
   const [open, setOpen] = useState(false);
   const [decision, setDecision] = useState<{
     leave: Leave;
@@ -48,7 +53,7 @@ export function Leaves({ employee }: { employee: boolean }) {
       setDecision(null);
     },
   });
-  const rows = q.data?.filter((l) => !filter || l.status === filter) || [];
+  const rows = q.data?.items || [];
   return (
     <>
       <Heading
@@ -86,12 +91,15 @@ export function Leaves({ employee }: { employee: boolean }) {
             <button
               className={v === filter ? "active" : ""}
               key={v}
-              onClick={() => setFilter(v)}
+              onClick={() => {
+                setFilter(v);
+                setPage(1);
+              }}
             >
               {l}
-              <span>
-                {q.data?.filter((x) => !v || x.status === v).length || 0}
-              </span>
+              {v === filter && (
+                <span>{q.data?.pagination.total_records ?? 0}</span>
+              )}
             </button>
           ))}
         </div>
@@ -211,6 +219,7 @@ export function Leaves({ employee }: { employee: boolean }) {
             )}
           </div>
         )}
+        <Pager pagination={q.data?.pagination} onPage={setPage} />
       </section>
       {open && (
         <Modal title="Pengajuan cuti & izin" close={() => setOpen(false)}>

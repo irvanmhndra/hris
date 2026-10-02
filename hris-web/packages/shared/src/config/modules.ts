@@ -106,9 +106,8 @@ export const modules: Record<string, ModuleConfig> = {
     fields: [
       {
         key: "url",
-        label: "Tautan dokumen (HTTPS)",
+        label: "Tautan dokumen (HTTPS, bila tidak mengunggah file)",
         type: "url",
-        required: true,
       },
       { key: "category", label: "Kategori", required: true },
     ],

@@ -59,3 +59,36 @@ export function query(params: Record<string, string | number | undefined>) {
   const s = q.toString();
   return s ? `?${s}` : "";
 }
+
+// upload sends one file (multipart field "file") and returns its record.
+export async function upload(
+  file: File,
+): Promise<{ id: number; name: string }> {
+  const token = useSession.getState().token;
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch("/api/v1/files", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body,
+  });
+  const data = await response
+    .json()
+    .catch(() => ({ message: "Server tidak dapat dihubungi" }));
+  if (!response.ok) throw new Error(data.message || "Unggah gagal");
+  return data.data;
+}
+// download fetches an authenticated file and saves it under its name.
+export async function download(id: number, name: string) {
+  const token = useSession.getState().token;
+  const response = await fetch(`/api/v1/files/${id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error("File tidak dapat diunduh");
+  const url = URL.createObjectURL(await response.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}

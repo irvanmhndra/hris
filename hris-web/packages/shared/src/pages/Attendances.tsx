@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import {
   date,
@@ -5,17 +6,26 @@ import {
   ErrorBox,
   initials,
   Loading,
+  Pager,
   time,
   today,
   useData,
 } from "../components/common";
 import { Heading } from "../components/Heading";
+import { apiPage, query } from "../services/api";
 import type { Attendance, AttendanceSummary } from "../types";
 import { ClockCard } from "./Attendance";
 export function Attendances({ employee }: { employee: boolean }) {
-  const q = useData<Attendance[]>("/attendances");
   const [day, setDay] = useState("");
-  const rows = q.data?.filter((a) => !day || a.date === day) || [];
+  const [page, setPage] = useState(1);
+  const q = useQuery({
+    queryKey: ["/attendances", "page", page, day],
+    queryFn: () =>
+      apiPage<Attendance>(
+        `/attendances${query({ page, per_page: 25, date: day })}`,
+      ),
+  });
+  const rows = q.data?.items || [];
   return (
     <>
       <Heading
@@ -32,15 +42,26 @@ export function Attendances({ employee }: { employee: boolean }) {
             <input
               type="date"
               value={day}
-              onChange={(e) => setDay(e.target.value)}
+              onChange={(e) => {
+                setDay(e.target.value);
+                setPage(1);
+              }}
             />
           </label>
           {day && (
-            <button className="text-button" onClick={() => setDay("")}>
+            <button
+              className="text-button"
+              onClick={() => {
+                setDay("");
+                setPage(1);
+              }}
+            >
               Reset
             </button>
           )}
-          <span className="count">100 catatan terbaru</span>
+          <span className="count">
+            {q.data?.pagination.total_records ?? 0} catatan
+          </span>
         </div>
         <ErrorBox error={q.error} />
         {q.isLoading ? (
@@ -110,6 +131,7 @@ export function Attendances({ employee }: { employee: boolean }) {
             {!rows.length && <Empty>Belum ada catatan kehadiran.</Empty>}
           </div>
         )}
+        <Pager pagination={q.data?.pagination} onPage={setPage} />
       </section>
     </>
   );

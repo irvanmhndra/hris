@@ -5,8 +5,10 @@ import {
   Search,
   ArrowUpRight,
   CalendarDays,
+  Download,
   Users,
   ClipboardList,
+  UserPlus,
 } from "lucide-react";
 import { useParams } from "react-router";
 import { Heading } from "../components/Heading";
@@ -17,12 +19,13 @@ import {
   ErrorBox,
   Loading,
   Modal,
-  useData,
+  Pager,
+  today,
 } from "../components/common";
 import { modules, statusLabels } from "../config/modules";
-import { api } from "../services/api";
+import { api, apiPage, download, query, upload } from "../services/api";
 import { useSession } from "../stores/session";
-import type { HRItem, Employee } from "../types";
+import type { HRItem, Employee, Department } from "../types";
 export function HRModule() {
   const { module = "" } = useParams();
   return modules[module] ? (
@@ -34,10 +37,19 @@ export function HRModule() {
 function ModulePage({ module }: { module: string }) {
   const cfg = modules[module];
   const admin = useSession((s) => s.user?.role === "admin");
-  const q = useData<HRItem[]>(`/hr/${module}`);
-  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const q = useQuery({
+    queryKey: [`/hr/${module}`, "page", page, filter],
+    queryFn: () =>
+      apiPage<HRItem>(
+        `/hr/${module}${query({ page, per_page: 20, status: filter })}`,
+      ),
+  });
+  const qc = useQueryClient();
+  const [hiring, setHiring] = useState<HRItem | null>(null);
+  const [fileError, setFileError] = useState<unknown>(null);
   const [editing, setEditing] = useState<HRItem | null | undefined>();
   const [detail, setDetail] = useState<HRItem | null>(null);
   const [action, setAction] = useState<{ item: HRItem; action: string } | null>(
@@ -56,12 +68,10 @@ function ModulePage({ module }: { module: string }) {
     },
   });
   const rows =
-    q.data?.filter(
-      (x) =>
-        (!filter || x.status === filter) &&
-        `${x.title} ${x.employee_name} ${x.description} ${x.data.code || ""} ${x.data.position || ""}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
+    q.data?.items.filter((x) =>
+      `${x.title} ${x.employee_name} ${x.description} ${x.data.code || ""} ${x.data.position || ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
     ) || [];
   const canCreate = cfg.request ? !admin : admin;
   const choose = (item: HRItem, verb: string) => {
@@ -84,17 +94,9 @@ function ModulePage({ module }: { module: string }) {
       </Heading>
       <div className="module-summary">
         <span>
-          <strong>{q.data?.length || 0}</strong> {cfg.singular.toLowerCase()}
-        </span>
-        <span>
-          <strong>
-            {q.data?.filter((x) =>
-              ["pending", "todo", "active", "applied", "draft"].includes(
-                x.status,
-              ),
-            ).length || 0}
-          </strong>{" "}
-          perlu ditindaklanjuti
+          <strong>{q.data?.pagination.total_records || 0}</strong>{" "}
+          {cfg.singular.toLowerCase()}
+          {filter && ` · ${statusLabels[filter]}`}
         </span>
         <span className="muted">
           {admin ? "Workspace perusahaan" : "Data sesuai akses Anda"}
@@ -106,7 +108,7 @@ function ModulePage({ module }: { module: string }) {
             <Search size={17} />
             <input
               aria-label="Cari data"
-              placeholder="Cari judul, nama, atau detail…"
+              placeholder="Cari di halaman ini…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -114,7 +116,10 @@ function ModulePage({ module }: { module: string }) {
           <select
             aria-label="Status"
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setPage(1);
+            }}
           >
             <option value="">Semua status</option>
             {cfg.statuses.map((s) => (
@@ -125,7 +130,7 @@ function ModulePage({ module }: { module: string }) {
           </select>
           <span className="count">{rows.length} catatan</span>
         </div>
-        <ErrorBox error={q.error} />
+        <ErrorBox error={q.error || fileError} />
         {q.isLoading ? (
           <Loading />
         ) : !rows.length ? (
@@ -271,6 +276,32 @@ function ModulePage({ module }: { module: string }) {
                       Update progres
                     </button>
                   )}
+                  {!!item.data.file_id && (
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        download(
+                          Number(item.data.file_id),
+                          String(item.data.file_name || "lampiran"),
+                        ).catch(setFileError)
+                      }
+                    >
+                      <Download size={15} />
+                      {String(item.data.file_name || "Unduh lampiran")}
+                    </button>
+                  )}
+                  {admin &&
+                    module === "recruitment" &&
+                    !item.employee_id &&
+                    (item.status === "offer" || item.status === "hired") && (
+                      <button
+                        className="primary"
+                        onClick={() => setHiring(item)}
+                      >
+                        <UserPlus size={15} />
+                        Jadikan karyawan
+                      </button>
+                    )}
                   {module === "documents" &&
                     String(item.data.url).startsWith("https://") && (
                       <a
@@ -287,7 +318,9 @@ function ModulePage({ module }: { module: string }) {
             ))}
           </div>
         )}
+        <Pager pagination={q.data?.pagination} onPage={setPage} />
       </section>
+      {hiring && <HireForm candidate={hiring} close={() => setHiring(null)} />}
       {editing !== undefined && (
         <ItemForm
           module={module}
@@ -403,13 +436,29 @@ function ItemForm({
     queryFn: () => api<Employee[]>("/employees"),
     enabled: !!admin && !!cfg.assignment,
   });
+  const attachable =
+    admin && (module === "documents" || module === "announcements");
+  const [keepFile, setKeepFile] = useState(!!item?.data.file_id);
   const m = useMutation({
-    mutationFn: (v: unknown) =>
-      api(
+    mutationFn: async ({
+      v,
+      file,
+    }: {
+      v: { data: Record<string, unknown> } & Record<string, unknown>;
+      file: File | null;
+    }) => {
+      if (file && file.size) {
+        const f = await upload(file);
+        v.data = { ...v.data, file_id: f.id, url: "" };
+      } else if (keepFile && item?.data.file_id) {
+        v.data = { ...v.data, file_id: Number(item.data.file_id), url: "" };
+      }
+      return api(
         item ? `/hr/${module}/${item.id}` : `/hr/${module}`,
         item ? "PUT" : "POST",
         v,
-      ),
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries();
       close();
@@ -432,14 +481,20 @@ function ItemForm({
               value = String(value) + ":00+07:00";
             data[f.key] = value;
           }
+          const file = fields.file instanceof File ? fields.file : null;
           m.mutate({
-            title: fields.title,
-            description: fields.description,
-            status: fields.status || cfg.statuses[0],
-            due_date: fields.due_date || "",
-            employee_id: fields.employee_id ? Number(fields.employee_id) : null,
-            data,
-            version: item?.version || 0,
+            v: {
+              title: fields.title,
+              description: fields.description,
+              status: fields.status || cfg.statuses[0],
+              due_date: fields.due_date || "",
+              employee_id: fields.employee_id
+                ? Number(fields.employee_id)
+                : null,
+              data,
+              version: item?.version || 0,
+            },
+            file,
           });
         }}
       >
@@ -517,6 +572,29 @@ function ItemForm({
             </label>
           ))}
         </div>
+        {attachable && (
+          <label>
+            Lampiran file (PDF, gambar, DOCX, XLSX · maks. 10 MB)
+            {keepFile && item?.data.file_id ? (
+              <span className="row-actions">
+                {String(item.data.file_name)}
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => setKeepFile(false)}
+                >
+                  Ganti / hapus
+                </button>
+              </span>
+            ) : (
+              <input
+                name="file"
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx"
+              />
+            )}
+          </label>
+        )}
         <label>
           {cfg.request ? "Alasan" : "Keterangan"}
           <textarea
@@ -535,6 +613,122 @@ function ItemForm({
           </button>
           <button className="primary" disabled={m.isPending}>
             {m.isPending ? "Menyimpan…" : "Simpan"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// HireForm turns an offer/hired candidate into an employee with a portal
+// account; the candidate is linked to the new employee.
+function HireForm({
+  candidate,
+  close,
+}: {
+  candidate: HRItem;
+  close: () => void;
+}) {
+  const qc = useQueryClient();
+  const depts = useQuery({
+    queryKey: ["/departments"],
+    queryFn: () => api<Department[]>("/departments"),
+  });
+  const m = useMutation({
+    mutationFn: (v: Record<string, unknown>) =>
+      api(`/hr/recruitment/${candidate.id}/convert`, "POST", v),
+    onSuccess: () => {
+      qc.invalidateQueries();
+      close();
+    },
+  });
+  return (
+    <Modal title={`Jadikan karyawan · ${candidate.title}`} close={close}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const d = Object.fromEntries(new FormData(e.currentTarget));
+          m.mutate({ ...d, department_id: Number(d.department_id) });
+        }}
+      >
+        <div className="form-grid">
+          <label>
+            Nama lengkap
+            <input
+              name="name"
+              defaultValue={candidate.title}
+              required
+              maxLength={120}
+            />
+          </label>
+          <label>
+            NIK / kode karyawan
+            <input name="code" required maxLength={40} autoFocus />
+          </label>
+          <label className="full">
+            Email kantor
+            <input
+              name="email"
+              type="email"
+              defaultValue={String(candidate.data.email || "")}
+              required
+            />
+          </label>
+          <label>
+            Departemen
+            <select name="department_id" defaultValue="" required>
+              <option value="" disabled>
+                Pilih departemen
+              </option>
+              {depts.data?.map((d) => (
+                <option value={d.id} key={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Jabatan
+            <input
+              name="position"
+              defaultValue={String(candidate.data.position || "")}
+              required
+              maxLength={120}
+            />
+          </label>
+          <label>
+            Tanggal bergabung
+            <input
+              name="joined_on"
+              type="date"
+              defaultValue={today()}
+              required
+            />
+          </label>
+          <label>
+            Password portal karyawan
+            <input
+              name="password"
+              type="password"
+              minLength={12}
+              maxLength={72}
+              required
+              autoComplete="new-password"
+            />
+          </label>
+        </div>
+        <p className="form-hint">
+          Data karyawan dan akun portal dibuat sekaligus; status kandidat
+          menjadi Diterima dan tertaut ke karyawan baru. Atur gaji, atasan, dan
+          shift setelahnya.
+        </p>
+        <ErrorBox error={m.error || depts.error} />
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={close}>
+            Batal
+          </button>
+          <button className="primary" disabled={m.isPending}>
+            Buat karyawan
           </button>
         </div>
       </form>
