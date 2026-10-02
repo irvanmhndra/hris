@@ -20,6 +20,7 @@ export interface Employee {
   joined_on: string;
   left_on: string | null;
   manager_id: number | null;
+  shift_id: number | null;
 }
 export interface Department {
   id: number;
@@ -33,6 +34,13 @@ export interface Attendance {
   date: string;
   check_in: string;
   check_out: string | null;
+  shift_name: string;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  late_minutes: number;
+  early_leave_minutes: number;
+  check_in_distance_m: number | null;
+  check_out_distance_m: number | null;
 }
 export interface Leave {
   calculation: string;
@@ -90,6 +98,55 @@ export interface WorkCalendar {
   leave_accrual: "annual" | "monthly";
   carry_over_max: number;
   leave_eligibility_months: number;
+  require_location: boolean;
+}
+export interface Shift {
+  id: number;
+  name: string;
+  start_time: string;
+  end_time: string;
+  grace_minutes: number;
+  active: boolean;
+}
+export interface AttendanceLocation {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+}
+export interface ScheduleDay {
+  date: string;
+  off: boolean;
+  shift_id: number | null;
+  shift_name: string;
+  start: string;
+  end: string;
+  grace_minutes: number;
+  assigned: boolean;
+}
+export interface EmployeeSchedule {
+  employee_id: number;
+  name: string;
+  shift_id: number | null;
+  days: ScheduleDay[];
+}
+export interface AttendanceToday {
+  schedule: ScheduleDay;
+  require_location: boolean;
+  locations: number;
+}
+export interface AttendanceSummary {
+  employee_id: number;
+  name: string;
+  scheduled_days: number;
+  present_days: number;
+  late_days: number;
+  late_minutes: number;
+  early_leave_days: number;
+  early_leave_minutes: number;
+  leave_days: number;
+  absent_days: number;
 }
 export interface Holiday {
   id: number;

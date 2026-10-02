@@ -18,7 +18,7 @@ import {
 import { Heading } from "../components/Heading";
 import { api, apiPage, query } from "../services/api";
 import { EmployeeTable } from "../components/EmployeeTable";
-import type { Department, Employee } from "../types";
+import type { Department, Employee, Shift } from "../types";
 function EmployeeForm({
   employee,
   close,
@@ -28,6 +28,7 @@ function EmployeeForm({
 }) {
   const depts = useData<Department[]>("/departments");
   const people = useData<Employee[]>("/employees");
+  const shifts = useData<Shift[]>("/shifts");
   const [status, setStatus] = useState(employee?.status || "active");
   const qc = useQueryClient();
   const m = useMutation({
@@ -49,6 +50,7 @@ function EmployeeForm({
       ...data,
       department_id: Number(data.department_id),
       manager_id: data.manager_id ? Number(data.manager_id) : null,
+      shift_id: data.shift_id ? Number(data.shift_id) : null,
     });
   }
   return (
@@ -122,6 +124,23 @@ function EmployeeForm({
                 .map((p) => (
                   <option value={p.id} key={p.id}>
                     {p.name} · {p.position}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Shift default
+            <select
+              name="shift_id"
+              key={shifts.data ? "ready" : "loading"}
+              defaultValue={employee?.shift_id || ""}
+            >
+              <option value="">Jam kantor (kalender kerja)</option>
+              {shifts.data
+                ?.filter((s) => s.active || s.id === employee?.shift_id)
+                .map((s) => (
+                  <option value={s.id} key={s.id}>
+                    {s.name} · {s.start_time}–{s.end_time}
                   </option>
                 ))}
             </select>

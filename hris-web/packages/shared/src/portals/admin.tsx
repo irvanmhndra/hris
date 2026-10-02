@@ -3,6 +3,7 @@ import {
   Building2,
   CalendarCheck,
   CalendarDays,
+  CalendarRange,
   ClipboardCheck,
   Clock3,
   FileText,
@@ -37,11 +38,13 @@ const HRModule = lazyPage(() => import("../pages/HRModule"), "HRModule");
 const Salaries = lazyPage(() => import("../pages/Payroll"), "Salaries");
 const Payroll = lazyPage(() => import("../pages/Payroll"), "Payroll");
 const Audit = lazyPage(() => import("../pages/Audit"), "Audit");
+const Shifts = lazyPage(() => import("../pages/Shifts"), "Shifts");
 const links: readonly NavItem[] = [
   ["/", "Ringkasan", LayoutDashboard],
   ["/employees", "Karyawan", Users],
   ["/departments", "Departemen", Building2],
   ["/attendance", "Kehadiran", Clock3],
+  ["/shifts", "Shift & jadwal", CalendarRange],
   ["/leaves", "Pengajuan cuti", CalendarDays],
   ["/balances", "Saldo cuti", CalendarCheck],
   ["/calendar", "Kalender kerja", CalendarDays],
@@ -73,6 +76,7 @@ export function AdminApp() {
       <Route path="/salaries" element={<Salaries />} />
       <Route path="/payroll" element={<Payroll />} />
       <Route path="/audit" element={<Audit />} />
+      <Route path="/shifts" element={<Shifts />} />
     </HRISApp>
   );
 }

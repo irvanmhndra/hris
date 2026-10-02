@@ -187,6 +187,7 @@ function CalendarForm({
             leave_eligibility_months: Number(
               data.get("leave_eligibility_months"),
             ),
+            require_location: calendar.require_location,
           });
         }}
       >

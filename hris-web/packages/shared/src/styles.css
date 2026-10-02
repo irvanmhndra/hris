@@ -1975,3 +1975,15 @@ footer > span {
     grid-row: 2;
   }
 }
+.schedule-grid td,
+.schedule-grid th {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.schedule-grid td.assigned {
+  font-weight: 700;
+  color: #5b4fbc;
+}
+.schedule-grid td.off {
+  color: #b3afc2;
+}
