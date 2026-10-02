@@ -83,6 +83,11 @@ export function SlipModal({
             ` · ${slip.worked_days} dari ${slip.period_days} hari kerja`}
           {slip.unpaid_leave_days > 0 &&
             ` · ${slip.unpaid_leave_days} hari cuti tidak dibayar`}
+          {slip.absent_days > 0 &&
+            ` · ${slip.absent_days} hari tanpa keterangan`}
+          {slip.late_count > 0 &&
+            ` · terlambat ${slip.late_count}× (${slip.late_minutes} menit)`}
+          {slip.run_kind === "correction" && " · Slip koreksi (selisih)"}
           {slip.final_period && " · PPh 21 perhitungan tahunan"}
         </p>
         <SlipSection

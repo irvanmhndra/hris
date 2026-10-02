@@ -188,6 +188,9 @@ function CalendarForm({
               data.get("leave_eligibility_months"),
             ),
             require_location: calendar.require_location,
+            carry_over_expiry_months: Number(
+              data.get("carry_over_expiry_months"),
+            ),
           });
         }}
       >
@@ -273,6 +276,18 @@ function CalendarForm({
               disabled={!admin}
             />
           </label>
+          <label>
+            Carry-over berlaku sampai bulan ke- (0 = tanpa batas)
+            <input
+              type="number"
+              name="carry_over_expiry_months"
+              min={0}
+              max={12}
+              defaultValue={calendar.carry_over_expiry_months}
+              required
+              disabled={!admin}
+            />
+          </label>
         </div>
         <p className="form-hint">
           Kuota default digunakan sampai ada alokasi tersimpan untuk
@@ -306,7 +321,12 @@ export function BalanceSummary() {
           {[
             ["Tersedia", b.available],
             ["Hak berjalan", b.accrued],
-            ["Carry-over", b.carried_over],
+            [
+              b.carry_expires_on
+                ? `Carry-over (s.d. ${b.carry_expires_on})`
+                : "Carry-over",
+              b.carried_over,
+            ],
             ["Terpakai", b.used],
             ["Dicadangkan", b.reserved],
           ].map(([label, value]) => (

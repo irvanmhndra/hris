@@ -99,6 +99,7 @@ export interface WorkCalendar {
   carry_over_max: number;
   leave_eligibility_months: number;
   require_location: boolean;
+  carry_over_expiry_months: number;
 }
 export interface Shift {
   id: number;
@@ -160,6 +161,7 @@ export interface Balance {
   allowance: number;
   accrued: number;
   carried_over: number;
+  carry_expires_on: string | null;
   used: number;
   reserved: number;
   available: number;
@@ -206,6 +208,10 @@ export interface Salary {
   bpjs_ketenagakerjaan: boolean;
   bpjs_pensiun: boolean;
   overtime_eligible: boolean;
+  nik: string;
+  npwp: string;
+  bpjs_kesehatan_number: string;
+  bpjs_ketenagakerjaan_number: string;
   note: string;
   components: SalaryComponent[];
 }
@@ -213,6 +219,9 @@ export interface PayrollSettings {
   jkk_rate: number;
   jp_wage_cap: number;
   kes_wage_cap: number;
+  late_deduction: "none" | "per_minute" | "per_occurrence";
+  late_deduction_amount: number;
+  deduct_absence: boolean;
 }
 export interface PayrollRun {
   id: number;
@@ -223,6 +232,8 @@ export interface PayrollRun {
   tax: number;
   employer_cost: number;
   thr_date: string | null;
+  kind: "regular" | "correction";
+  corrects_run_id: number | null;
   payment_reference: string;
   created_at: string;
 }
@@ -253,6 +264,15 @@ export interface Payslip {
   worked_days: number;
   period_days: number;
   unpaid_leave_days: number;
+  absent_days: number;
+  late_count: number;
+  late_minutes: number;
+  nik: string;
+  npwp: string;
+  bpjs_kesehatan_number: string;
+  bpjs_ketenagakerjaan_number: string;
+  run_kind: "regular" | "correction";
+  ter_rate: number;
   taxable_gross: number;
   pph21: number;
   employer_cost: number;

@@ -102,7 +102,7 @@ Tanpa `page`, endpoint mempertahankan perilaku lama agar klien lama tidak rusak:
 | GET / PUT | /employees/:id/profile | admin | Kontak karyawan dalam perusahaan |
 | GET | /audit-logs | admin | Aktivitas modul HR/payroll, terbaru dulu (lihat [pagination](#pagination)) |
 
-Body kalender: `{"workdays":[1,2,3,4,5],"annual_allowance":12,"start_time":"09:00","end_time":"18:00","leave_accrual":"annual","carry_over_max":0,"leave_eligibility_months":0,"require_location":false}`. Minggu=0, Sabtu=6. Jam kalender adalah jadwal default ("Jam kantor") untuk karyawan tanpa shift. `leave_accrual` `annual` (penuh di awal tahun) atau `monthly` (1/12 per bulan sampai bulan cuti); `carry_over_max` hari sisa hak tahun lalu yang terbawa (0 = hangus; hanya dari hak tahun lalu sendiri); `leave_eligibility_months` masa kerja sebelum berhak cuti tahunan (0–24). `require_location` menolak absensi di luar radius lokasi. Body profil menerima `phone`, `address`, `emergency_name`, `emergency_phone`, `emergency_relation`; field identitas dari client tidak dipakai untuk mengubah data karyawan.
+Body kalender: `{"workdays":[1,2,3,4,5],"annual_allowance":12,"start_time":"09:00","end_time":"18:00","leave_accrual":"annual","carry_over_max":0,"leave_eligibility_months":0,"require_location":false}`. Minggu=0, Sabtu=6. Jam kalender adalah jadwal default ("Jam kantor") untuk karyawan tanpa shift. `leave_accrual` `annual` (penuh di awal tahun) atau `monthly` (1/12 per bulan sampai bulan cuti); `carry_over_max` hari sisa hak tahun lalu yang terbawa (0 = hangus; hanya dari hak tahun lalu sendiri); `leave_eligibility_months` masa kerja sebelum berhak cuti tahunan (0–24). `require_location` menolak absensi di luar radius lokasi. `carry_over_expiry_months` (0–12; 0 = tanpa batas): hari carry-over hanya dapat dipakai untuk cuti sampai akhir bulan tersebut; saldo menampilkan `carry_expires_on`. Body profil menerima `phone`, `address`, `emergency_name`, `emergency_phone`, `emergency_relation`; field identitas dari client tidak dipakai untuk mengubah data karyawan.
 
 Cuti baru menghitung hari kerja di luar libur perusahaan dan menyimpan snapshot. Cuti annual pending mencadangkan saldo; approved memakai saldo; rejected/cancelled melepaskannya. Cuti lintas tahun memeriksa kuota masing-masing tahun. `calculation` menunjukkan `working_days` atau `legacy_calendar_days` untuk pengajuan lama.
 
@@ -138,6 +138,7 @@ Body action: `{"action":"approve","version":1}`. Penolakan memerlukan `note` min
 | GET | /payroll/:id/slips | admin | Slip suatu periode, termasuk `lines` |
 | PUT | /payroll/slips/:id | admin | Sesuaikan baris slip draft lalu hitung ulang, wajib version |
 | PATCH | /payroll/:id/action | admin | finalize / paid / void |
+| POST | /payroll/:id/correction | admin | Buat run koreksi (draft) untuk payroll reguler final/paid pada periode terakhir tahun berjalan |
 | GET | /payslips | karyawan | Slip sendiri yang finalized atau paid |
 
 Body profil gaji:
@@ -150,13 +151,15 @@ Body profil gaji:
   {"kind":"deduction","name":"Koperasi","amount":100000}]}
 ```
 
-`ptkp_status`: TK/0–TK/3, K/0–K/3. `tax_method`: `gross` (dipotong dari gaji), `gross_up` (perusahaan memberi tunjangan PPh sebesar pajaknya), `none` (PPh 21 tidak dihitung; dipakai profil lama). Jaminan Pensiun membutuhkan BPJS Ketenagakerjaan. Tunjangan `fixed` (tetap) menjadi dasar BPJS, upah lembur, dan THR. Nominal integer rupiah 0–1 triliun.
+Profil gaji juga menerima `nik` (16 digit), `npwp` (15/16 digit), `bpjs_kesehatan_number`, dan `bpjs_ketenagakerjaan_number` (8–20 digit), boleh kosong; titik/tanda hubung diabaikan. NIK/NPWP disalin ke slip. `ptkp_status`: TK/0–TK/3, K/0–K/3. `tax_method`: `gross` (dipotong dari gaji), `gross_up` (perusahaan memberi tunjangan PPh sebesar pajaknya), `none` (PPh 21 tidak dihitung; dipakai profil lama). Jaminan Pensiun membutuhkan BPJS Ketenagakerjaan. Tunjangan `fixed` (tetap) menjadi dasar BPJS, upah lembur, dan THR. Nominal integer rupiah 0–1 triliun.
 
-Settings: `{"jkk_rate":24,"jp_wage_cap":10547400,"kes_wage_cap":12000000}`. `jkk_rate` dalam perseratus persen (24 = 0,24%; kelas 24/54/89/127/174).
+Settings: `{"jkk_rate":24,"jp_wage_cap":10547400,"kes_wage_cap":12000000,"late_deduction":"none","late_deduction_amount":0,"deduct_absence":false}`. `late_deduction`: `none`, `per_minute` (upah tetap/173 per jam × menit terlambat), atau `per_occurrence` (`late_deduction_amount` per check-in terlambat), menjadi baris `LATE` yang dapat disesuaikan. `deduct_absence` mengurangi hari dibayar untuk hari terjadwal tanpa absensi maupun cuti disetujui (dihitung sampai hari payroll dibuat). `jkk_rate` dalam perseratus persen (24 = 0,24%; kelas 24/54/89/127/174).
 
-Penyesuaian slip: `{"version":1,"note":"","lines":[{"kind":"earning","code":"ADJUSTMENT","name":"Bonus","amount":1000000,"taxable":true,"fixed":false}, …]}`. Kirim seluruh baris non-statutori (kode `BASIC`, `ALLOWANCE`, `OVERTIME`, `THR`, `ADJUSTMENT`, `DEDUCTION`); baris BPJS, PPh 21, tunjangan PPh, dan pengembalian PPh selalu dihitung ulang dan ditolak bila dikirim.
+Penyesuaian slip: `{"version":1,"note":"","lines":[{"kind":"earning","code":"ADJUSTMENT","name":"Bonus","amount":1000000,"taxable":true,"fixed":false}, …]}`. Kirim seluruh baris non-statutori (kode `BASIC`, `ALLOWANCE`, `OVERTIME`, `THR`, `ADJUSTMENT`, `DEDUCTION`, `LATE`); baris BPJS, PPh 21, tunjangan PPh, dan pengembalian PPh selalu dihitung ulang dan ditolak bila dikirim.
 
-Satu periode hanya boleh memiliki satu payroll non-void; payroll periode sebelumnya harus sudah final/paid, dan periode baru tidak boleh disisipkan sebelum payroll lain pada tahun yang sama. Pembuatan membutuhkan profil gaji untuk seluruh karyawan aktif yang bergabung sebelum akhir periode serta karyawan yang keluar pada/sesudah awal periode. Draft dapat disesuaikan atau di-void (lembur di dalamnya kembali tersedia). Finalisasi mengunci nominal dan menerbitkan slip. Final/paid tidak dapat dibatalkan atau diedit.
+Slip menyertakan `ter_rate` (perseratus persen; 0 untuk perhitungan tahunan/manual/koreksi), `late_count`, `late_minutes`, `absent_days`, `nik`, `npwp`, nomor BPJS, dan `run_kind`. Run koreksi (`kind: "correction"`, `corrects_run_id`) menyalin snapshot pajak setiap slip dengan nominal nol; baris yang ditambahkan HR dihitung bersama slip terkunci periode yang sama sehingga PPh 21 slip koreksi adalah selisihnya (bisa berupa pengembalian). Satu draft koreksi per periode; payroll periode berikutnya menunggu koreksi difinalisasi.
+
+Satu periode hanya boleh memiliki satu payroll reguler non-void; payroll periode sebelumnya harus sudah final/paid, dan periode baru tidak boleh disisipkan sebelum payroll lain pada tahun yang sama. Pembuatan membutuhkan profil gaji untuk seluruh karyawan aktif yang bergabung sebelum akhir periode serta karyawan yang keluar pada/sesudah awal periode. Draft dapat disesuaikan atau di-void (lembur di dalamnya kembali tersedia). Finalisasi mengunci nominal dan menerbitkan slip. Final/paid tidak dapat dibatalkan atau diedit.
 
 Body tindakan: `{"action":"finalize"}`, `{"action":"void"}`, atau `{"action":"paid","reference":"TRANSFER-MANUAL-001"}`. Referensi paid wajib 5–150 karakter. Tindakan paid **hanya mencatat pembayaran yang dilakukan di luar aplikasi**. Tidak ada pemanggilan payment gateway atau transfer bank.
 
@@ -181,4 +184,4 @@ Urutan jadwal: penugasan per tanggal → shift default karyawan (hanya pada hari
 | POST | /files | admin | Multipart field `file`, maks. 10 MB; PDF, PNG, JPG, WEBP, DOCX, XLSX (ekstensi dicocokkan dengan isi) |
 | GET | /files/:id | semua | Unduh sebagai attachment; karyawan hanya file pada pengumuman/dokumen published |
 
-File disimpan di `UPLOAD_DIR` (disk lokal, nama acak) dan metadata di tabel `files`.
+File disimpan di `UPLOAD_DIR` (disk lokal) atau bucket S3-compatible (`STORAGE_DRIVER=s3`: AWS S3, Cloudflare R2, MinIO) dengan nama acak; metadata di tabel `files`.

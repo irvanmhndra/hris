@@ -45,6 +45,7 @@ const INPUT_CODES = [
   "THR",
   "ADJUSTMENT",
   "DEDUCTION",
+  "LATE",
 ];
 
 type Row = {
@@ -209,6 +210,14 @@ function SalaryForm({ salary, close }: { salary: Salary; close: () => void }) {
             bpjs_ketenagakerjaan: tk,
             bpjs_pensiun: tk && jp,
             overtime_eligible: overtime,
+            ...Object.fromEntries(
+              [
+                "nik",
+                "npwp",
+                "bpjs_kesehatan_number",
+                "bpjs_ketenagakerjaan_number",
+              ].map((k) => [k, new FormData(e.currentTarget).get(k)]),
+            ),
             note: new FormData(e.currentTarget).get("note"),
             components: rows.map((r): SalaryComponent => ({
               kind: r.kind as SalaryComponent["kind"],
@@ -279,6 +288,44 @@ function SalaryForm({ salary, close }: { salary: Salary; close: () => void }) {
             checked={overtime}
             onChange={setOvertime}
           />
+        </div>
+        <div className="form-grid">
+          <label>
+            NIK (KTP)
+            <input
+              name="nik"
+              defaultValue={salary.nik}
+              inputMode="numeric"
+              pattern="[0-9]{16}"
+              title="16 digit"
+            />
+          </label>
+          <label>
+            NPWP
+            <input
+              name="npwp"
+              defaultValue={salary.npwp}
+              inputMode="numeric"
+              pattern="[0-9.\-]{15,20}"
+              title="15/16 digit"
+            />
+          </label>
+          <label>
+            No. BPJS Kesehatan
+            <input
+              name="bpjs_kesehatan_number"
+              defaultValue={salary.bpjs_kesehatan_number}
+              inputMode="numeric"
+            />
+          </label>
+          <label>
+            No. BPJS Ketenagakerjaan
+            <input
+              name="bpjs_ketenagakerjaan_number"
+              defaultValue={salary.bpjs_ketenagakerjaan_number}
+              inputMode="numeric"
+            />
+          </label>
         </div>
         <div className="field-label">Tunjangan dan potongan rutin</div>
         <LineEditor
@@ -367,6 +414,13 @@ function SettingsForm({ close }: { close: () => void }) {
               jkk_rate: Number(d.get("jkk_rate")),
               jp_wage_cap: Number(d.get("jp_wage_cap")),
               kes_wage_cap: Number(d.get("kes_wage_cap")),
+              late_deduction: String(
+                d.get("late_deduction"),
+              ) as PayrollSettings["late_deduction"],
+              late_deduction_amount: Number(
+                d.get("late_deduction_amount") || 0,
+              ),
+              deduct_absence: d.get("deduct_absence") === "on",
             });
           }}
         >
@@ -404,10 +458,48 @@ function SettingsForm({ close }: { close: () => void }) {
               />
             </label>
           </div>
+          <div className="form-grid">
+            <label>
+              Potongan keterlambatan
+              <select
+                name="late_deduction"
+                defaultValue={q.data.late_deduction}
+              >
+                <option value="none">Tidak dipotong</option>
+                <option value="per_minute">
+                  Per menit (upah 1/173 per jam)
+                </option>
+                <option value="per_occurrence">
+                  Nominal per keterlambatan
+                </option>
+              </select>
+            </label>
+            <label>
+              Nominal per keterlambatan
+              <input
+                name="late_deduction_amount"
+                type="number"
+                min={0}
+                max={1000000000}
+                defaultValue={q.data.late_deduction_amount}
+              />
+            </label>
+          </div>
+          <div className="weekday-picker">
+            <label>
+              <input
+                type="checkbox"
+                name="deduct_absence"
+                defaultChecked={q.data.deduct_absence}
+              />
+              <span>Potong gaji hari tanpa keterangan (prorata)</span>
+            </label>
+          </div>
           <p className="form-hint">
-            Batas upah ditetapkan BPJS dan dapat berubah setiap tahun; perbarui
-            sebelum membuat payroll. Payroll menyimpan nilai yang berlaku saat
-            dibuat.
+            Keterlambatan dan ketidakhadiran dihitung dari jadwal shift sampai
+            hari payroll dibuat, dan dapat disesuaikan di slip draft. Batas upah
+            ditetapkan BPJS dan dapat berubah setiap tahun; perbarui sebelum
+            membuat payroll. Payroll menyimpan nilai yang berlaku saat dibuat.
           </p>
           <ErrorBox error={m.error} />
           <div className="modal-actions">
@@ -547,6 +639,14 @@ export function Payroll() {
       setAction(null);
     },
   });
+  const correct = useMutation({
+    mutationFn: (id: number) =>
+      api<{ id: number }>(`/payroll/${id}/correction`, "POST"),
+    onSuccess: (d) => {
+      qc.invalidateQueries();
+      setSelected(d.id);
+    },
+  });
   const selectedRun = q.data?.find((r) => r.id === selected);
   return (
     <>
@@ -583,6 +683,12 @@ export function Payroll() {
           <div className="payroll-run-summary">
             <div>
               <Badge status={selectedRun.status} />
+              {selectedRun.kind === "correction" && (
+                <span className="badge pending">
+                  <i />
+                  Koreksi
+                </span>
+              )}
               <h2>{rupiah(selectedRun.total)}</h2>
               <p>
                 {selectedRun.employees} karyawan · PPh 21{" "}
@@ -620,6 +726,17 @@ export function Payroll() {
                   </button>
                 </>
               )}
+              {selectedRun.kind === "regular" &&
+                (selectedRun.status === "finalized" ||
+                  selectedRun.status === "paid") && (
+                  <button
+                    className="secondary"
+                    disabled={correct.isPending}
+                    onClick={() => correct.mutate(selectedRun.id)}
+                  >
+                    Buat koreksi
+                  </button>
+                )}
               {selectedRun.status === "finalized" && (
                 <button
                   className="primary"
@@ -633,6 +750,7 @@ export function Payroll() {
               )}
             </div>
           </div>
+          <ErrorBox error={correct.error} />
           <PayrollEntries run={selectedRun} />
         </>
       ) : q.isLoading ? (
@@ -657,6 +775,9 @@ export function Payroll() {
                     <td>
                       <strong>{r.period}</strong>
                       {r.thr_date && <small className="block">+ THR</small>}
+                      {r.kind === "correction" && (
+                        <small className="block">Koreksi</small>
+                      )}
                     </td>
                     <td>{r.employees}</td>
                     <td>{rupiah(r.total)}</td>
@@ -823,6 +944,26 @@ function ThrFields() {
   );
 }
 
+// downloadCsv saves rows as a UTF-8 CSV that Excel opens correctly; cells
+// starting with formula characters are neutralised.
+function downloadCsv(filename: string, rows: (string | number)[][]) {
+  const cell = (v: string | number) =>
+    '"' +
+    String(v)
+      .replace(/^[=+@\-\t\r]/, "'$&")
+      .replaceAll('"', '""') +
+    '"';
+  const text = rows.map((row) => row.map(cell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(
+    new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" }),
+  );
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 const sumCodes = (s: Payslip, ...codes: string[]) =>
   s.lines
     .filter((l) => codes.includes(l.code))
@@ -832,16 +973,12 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
   const q = useData<Payslip[]>(`/payroll/${run.id}/slips`);
   const [edit, setEdit] = useState<Payslip | null>(null);
   const [slip, setSlip] = useState<Payslip | null>(null);
-  function csv() {
-    const cell = (v: string | number) =>
-      '"' +
-      String(v)
-        .replace(/^[=+@\-\t\r]/, "'$&")
-        .replaceAll('"', '""') +
-      '"';
-    const text = [
+  const slips = q.data || [];
+  const name = `${run.period}${run.kind === "correction" ? "-koreksi" : ""}`;
+  const csv = () =>
+    downloadCsv(`payroll-${name}-${run.status}.csv`, [
       [
-        "NIK",
+        "Kode",
         "Nama",
         "PTKP",
         "Hari kerja",
@@ -854,7 +991,7 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
         "Gaji bersih",
         "BPJS perusahaan",
       ],
-      ...(q.data || []).map((s) => [
+      ...slips.map((s) => [
         s.employee_code,
         s.employee_name,
         s.ptkp_status,
@@ -868,18 +1005,85 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
         s.net,
         s.employer_cost,
       ]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `payroll-${run.period}-${run.status}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+    ]);
+  // Recap for filling e-Bupot 21 / Coretax (not an official import file).
+  const pph21 = () =>
+    downloadCsv(`rekap-pph21-${name}.csv`, [
+      [
+        "Masa Pajak",
+        "Tahun Pajak",
+        "NIK",
+        "NPWP",
+        "Nama",
+        "Status PTKP",
+        "Kode Objek Pajak",
+        "Penghasilan Bruto",
+        "Tarif",
+        "PPh 21 Dipotong",
+        "Metode",
+      ],
+      ...slips
+        .filter((s) => s.tax_method !== "none")
+        .map((s) => [
+          Number(run.period.slice(5)),
+          run.period.slice(0, 4),
+          s.nik,
+          s.npwp,
+          s.employee_name,
+          s.ptkp_status,
+          "21-100-01",
+          s.taxable_gross,
+          s.run_kind === "correction"
+            ? "Koreksi (selisih)"
+            : s.final_period
+              ? "Pasal 17 (masa terakhir)"
+              : `${(s.ter_rate / 100).toLocaleString("id-ID")}% TER`,
+          s.pph21,
+          s.tax_method === "gross_up" ? "Gross-up" : "Gross",
+        ]),
+    ]);
+  const bpjsCodes = [
+    "BPJS_KES_ER",
+    "BPJS_KES_EE",
+    "JHT_ER",
+    "JHT_EE",
+    "JP_ER",
+    "JP_EE",
+    "JKK",
+    "JKM",
+  ];
+  const bpjs = () =>
+    downloadCsv(`rekap-bpjs-${name}.csv`, [
+      [
+        "Kode",
+        "Nama",
+        "NIK",
+        "No. BPJS Kesehatan",
+        "No. BPJS Ketenagakerjaan",
+        "Dasar upah",
+        "Kes perusahaan",
+        "Kes karyawan",
+        "JHT perusahaan",
+        "JHT karyawan",
+        "JP perusahaan",
+        "JP karyawan",
+        "JKK",
+        "JKM",
+        "Total iuran",
+      ],
+      ...slips.map((s) => [
+        s.employee_code,
+        s.employee_name,
+        s.nik,
+        s.bpjs_kesehatan_number,
+        s.bpjs_ketenagakerjaan_number,
+        s.lines
+          .filter((l) => l.kind === "earning" && l.fixed)
+          .reduce((t, l) => t + l.amount, 0),
+        ...bpjsCodes.map((c) => sumCodes(s, c)),
+        sumCodes(s, ...bpjsCodes),
+      ]),
+    ]);
   return (
     <section className="panel">
       <div className="panel-head">
@@ -887,10 +1091,22 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
           <h2>Rincian slip gaji</h2>
           <p>Snapshot perhitungan pada periode ini.</p>
         </div>
-        <button className="secondary" onClick={csv} disabled={!q.data?.length}>
-          <Download size={15} />
-          Ekspor CSV
-        </button>
+        <div className="row-actions">
+          <button className="secondary" onClick={csv} disabled={!slips.length}>
+            <Download size={15} />
+            Ekspor CSV
+          </button>
+          <button
+            className="secondary"
+            onClick={pph21}
+            disabled={!slips.length}
+          >
+            Rekap PPh 21
+          </button>
+          <button className="secondary" onClick={bpjs} disabled={!slips.length}>
+            Rekap BPJS
+          </button>
+        </div>
       </div>
       <ErrorBox error={q.error} />
       {q.isLoading ? (
@@ -918,6 +1134,9 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
                       {s.worked_days < s.period_days &&
                         ` · prorata ${s.worked_days}/${s.period_days} hari`}
                       {s.final_period && " · PPh tahunan"}
+                      {s.late_count > 0 &&
+                        ` · terlambat ${s.late_count}× (${s.late_minutes} mnt)`}
+                      {s.absent_days > 0 && ` · alpa ${s.absent_days} hari`}
                     </small>
                   </td>
                   <td>{rupiah(s.basic_salary + s.allowance)}</td>

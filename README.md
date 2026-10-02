@@ -114,8 +114,11 @@ Tes integrasi membuat schema unik, menjalankan migrasi lewat runner, menguji wor
    - THR: 1 bulan upah tetap untuk masa kerja ≥12 bulan, proporsional untuk 1–12 bulan;
    - BPJS Kesehatan 4%+1% (batas upah), JHT 3,7%+2%, JP 2%+1% (batas upah), JKK sesuai kelas, JKM 0,3%;
    - PPh 21 TER bulanan (PP 58/2023) atas bruto termasuk premi JKK/JKM/BPJS Kesehatan perusahaan; Desember atau bulan keluar memakai tarif Pasal 17 setahun dikurangi PPh yang sudah dipotong (bisa menjadi pengembalian). Gross-up menambahkan tunjangan PPh sebesar pajaknya.
+   - opsional (Pengaturan BPJS): potongan keterlambatan per menit (upah 1/173 per jam) atau nominal per keterlambatan, serta potongan prorata hari tanpa keterangan, dihitung dari jadwal shift dan absensi sampai hari payroll dibuat.
 4. **Sesuaikan** slip draft (bonus, kasbon, koreksi) — BPJS dan PPh 21 dihitung ulang otomatis.
 5. **Finalisasi**, lalu bayar di luar aplikasi dan **Catat sudah dibayar** dengan referensinya.
+6. Unduh **Rekap PPh 21** (NIK, NPWP, PTKP, kode objek 21-100-01, bruto, tarif TER/Pasal 17, PPh dipotong) untuk mengisi e-Bupot/Coretax, dan **Rekap BPJS** per program. NIK, NPWP, dan nomor BPJS diisi di Komponen gaji. Rekap ini bukan file impor resmi DJP/BPJS.
+7. Salah hitung setelah final? **Buat koreksi** pada payroll periode terakhir: slip koreksi hanya berisi penyesuaian dan selisih PPh 21, tanpa membuka ulang payroll asli.
 
 Profil gaji dan slip yang dibuat sebelum migrasi 000005 tetap memakai metode pajak manual tanpa BPJS, sehingga nominal lamanya tidak berubah. Ubah ke gross/gross-up dan aktifkan BPJS di Komponen gaji untuk memakai perhitungan otomatis. Tabel TER dan tarif dikodekan dari regulasi yang berlaku saat ditulis; verifikasi dengan konsultan pajak sebelum dipakai untuk payroll riil.
 
@@ -139,13 +142,13 @@ make migrate          # sekarang: tidak ada perubahan
 
 Bila database baru sampai 000002, jalankan `cd hris-api && go run ./cmd/migrate force 2`, lalu `make migrate` untuk menerapkan 000003 dan 000004. Untuk Compose, pakai `docker compose run --rm migrate ./migrate force 4` sebelum `docker compose up -d`.
 
-Migrasi 000003–000006 bersifat forward-only; 000007 dan 000008 dapat di-rollback. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
+Migrasi 000003–000006 dan 000009 bersifat forward-only; 000007 dan 000008 dapat di-rollback. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
 
 ## Batas implementasi saat ini
 
-Payroll menghitung PPh 21, BPJS, prorata, lembur, cuti tidak dibayar, dan THR secara otomatis dengan pembayaran manual. Belum ada transfer bank, laporan e-Bupot/SPT, koreksi payroll setelah finalisasi, potongan keterlambatan otomatis, atau saldo PPh dari sistem lain (karyawan yang pindah di tengah tahun dihitung dari periode yang tercatat di HRIS saja). Karyawan keluar tanpa tanggal keluar (data lama) tidak ikut payroll berikutnya.
+Payroll menghitung PPh 21, BPJS, prorata, lembur, cuti tidak dibayar, keterlambatan, ketidakhadiran, dan THR secara otomatis dengan pembayaran manual. Belum ada transfer bank, file impor resmi e-Bupot/SPT, koreksi untuk periode selain yang terakhir (sesuaikan di payroll berikutnya), atau saldo PPh dari sistem lain (karyawan yang pindah di tengah tahun dihitung dari periode yang tercatat di HRIS saja). Karyawan keluar tanpa tanggal keluar (data lama) tidak ikut payroll berikutnya.
 
-Persetujuan maksimal dua tingkat (atasan langsung, lalu HR). Carry-over cuti hanya membawa sisa hak tahun sebelumnya dan tidak memiliki tanggal kedaluwarsa. Lokasi absensi memakai GPS browser (dapat dipalsukan perangkat); belum ada biometrik atau selfie. Dokumen berupa unggahan file atau tautan, tanpa tanda tangan; file disimpan di disk lokal (`UPLOAD_DIR`), belum di object storage. Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen tanpa portal lowongan publik.
+Persetujuan maksimal dua tingkat (atasan langsung, lalu HR). Carry-over cuti hanya membawa sisa hak tahun sebelumnya; batas berlakunya dapat diatur sampai bulan tertentu. Lokasi absensi memakai GPS browser (dapat dipalsukan perangkat); belum ada biometrik atau selfie. Dokumen berupa unggahan file atau tautan, tanpa tanda tangan; file disimpan di disk lokal (`UPLOAD_DIR`) atau S3/Cloudflare R2 (`STORAGE_DRIVER=s3`). Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen tanpa portal lowongan publik.
 
 Session berlaku 12 jam, tanpa refresh token. Reset password membutuhkan SMTP (`SMTP_HOST`); tanpa itu email ditulis ke log, hanya untuk pengembangan.
 
