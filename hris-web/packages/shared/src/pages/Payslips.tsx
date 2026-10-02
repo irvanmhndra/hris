@@ -11,7 +11,43 @@ import {
   useData,
 } from "../components/common";
 import { useSession } from "../stores/session";
-import type { Payslip } from "../types";
+import type { PayrollLine, Payslip } from "../types";
+function SlipSection({
+  title,
+  lines,
+  minus,
+  muted,
+}: {
+  title: string;
+  lines: PayrollLine[];
+  minus?: boolean;
+  muted?: boolean;
+}) {
+  if (!lines.length) return null;
+  return (
+    <>
+      <h3 className="slip-section">{title}</h3>
+      <dl className={muted ? "slip-lines muted" : "slip-lines"}>
+        {lines.map((l, i) => (
+          <div key={i}>
+            <dt>{l.name}</dt>
+            <dd>
+              {minus ? "− " : ""}
+              {rupiah(l.amount)}
+            </dd>
+          </div>
+        ))}
+        <div className="slip-subtotal">
+          <dt>Total</dt>
+          <dd>
+            {minus ? "− " : ""}
+            {rupiah(lines.reduce((t, l) => t + l.amount, 0))}
+          </dd>
+        </div>
+      </dl>
+    </>
+  );
+}
 export function SlipModal({
   slip,
   close,
@@ -39,28 +75,32 @@ export function SlipModal({
             {slip.employee_code} · {slip.position}
           </p>
         </div>
-        <dl className="slip-lines">
-          <div>
-            <dt>Gaji pokok</dt>
-            <dd>{rupiah(slip.basic_salary)}</dd>
-          </div>
-          <div>
-            <dt>Tunjangan</dt>
-            <dd>{rupiah(slip.allowance)}</dd>
-          </div>
-          <div>
-            <dt>Gaji bruto</dt>
-            <dd>{rupiah(slip.basic_salary + slip.allowance)}</dd>
-          </div>
-          <div>
-            <dt>Potongan</dt>
-            <dd>− {rupiah(slip.deduction)}</dd>
-          </div>
-        </dl>
+        <p className="slip-meta">
+          PTKP {slip.ptkp_status}
+          {slip.tax_method === "gross_up" && " · PPh 21 ditanggung perusahaan"}
+          {slip.tax_method === "none" && " · PPh 21 dihitung manual"}
+          {slip.worked_days < slip.period_days &&
+            ` · ${slip.worked_days} dari ${slip.period_days} hari kerja`}
+          {slip.final_period && " · PPh 21 perhitungan tahunan"}
+        </p>
+        <SlipSection
+          title="Pendapatan"
+          lines={slip.lines.filter((l) => l.kind === "earning")}
+        />
+        <SlipSection
+          title="Potongan"
+          lines={slip.lines.filter((l) => l.kind === "deduction")}
+          minus
+        />
         <div className="payroll-total">
           <span>Gaji bersih</span>
           <strong>{rupiah(slip.net)}</strong>
         </div>
+        <SlipSection
+          title="Ditanggung perusahaan (tidak memotong gaji)"
+          lines={slip.lines.filter((l) => l.kind === "employer")}
+          muted
+        />
         {slip.note && <p className="full-description">{slip.note}</p>}
         <small>
           Slip merupakan catatan perhitungan HR. Status final belum menunjukkan

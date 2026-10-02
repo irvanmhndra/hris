@@ -27,6 +27,7 @@ function EmployeeForm({
   close: () => void;
 }) {
   const depts = useData<Department[]>("/departments");
+  const [status, setStatus] = useState(employee?.status || "active");
   const qc = useQueryClient();
   const m = useMutation({
     mutationFn: (v: Record<string, unknown>) =>
@@ -114,11 +115,26 @@ function EmployeeForm({
           </label>
           <label>
             Status
-            <select name="status" defaultValue={employee?.status || "active"}>
+            <select
+              name="status"
+              value={status}
+              onChange={(e) => setStatus(e.target.value as Employee["status"])}
+            >
               <option value="active">Aktif</option>
               <option value="inactive">Nonaktif</option>
             </select>
           </label>
+          {status === "inactive" && (
+            <label>
+              Hari kerja terakhir
+              <input
+                type="date"
+                name="left_on"
+                defaultValue={employee?.left_on || today()}
+                required
+              />
+            </label>
+          )}
           <label className="full">
             {employee ? "Password baru (opsional)" : "Password portal karyawan"}
             <input

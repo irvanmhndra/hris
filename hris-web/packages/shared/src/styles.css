@@ -1911,3 +1911,67 @@ footer > span {
     break-inside: avoid;
   }
 }
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.field-label + .weekday-picker {
+  margin-top: 0;
+}
+.line-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.line-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+.line-row input {
+  padding: 9px 10px;
+}
+.line-row .weekday-picker {
+  margin: 0;
+  flex-wrap: nowrap;
+}
+.line-row .weekday-picker span {
+  padding: 8px 9px;
+  white-space: nowrap;
+}
+.line-kind {
+  border-style: dashed !important;
+}
+.slip-meta {
+  font-size: 11px;
+  color: #8c879e;
+  margin-bottom: 6px;
+}
+.slip-section {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8c879e;
+  margin: 20px 0 2px;
+}
+.slip-lines .slip-subtotal dt,
+.slip-lines .slip-subtotal dd {
+  font-weight: 700;
+  color: #514668;
+}
+.slip-lines.muted dd {
+  font-weight: 500;
+  color: #8c879e;
+}
+@media (max-width: 600px) {
+  .line-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .line-row .weekday-picker {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Plus, ArrowLeft, Download } from "lucide-react";
+import { Plus, ArrowLeft, Download, Settings2, Trash2 } from "lucide-react";
 import { Heading } from "../components/Heading";
 import {
   Badge,
@@ -13,58 +13,220 @@ import {
   useData,
 } from "../components/common";
 import { api } from "../services/api";
-import type { Salary, PayrollRun, Payslip } from "../types";
+import type {
+  Salary,
+  SalaryComponent,
+  PayrollRun,
+  PayrollSettings,
+  Payslip,
+  PayrollLine,
+} from "../types";
 import { SlipModal } from "./Payslips";
-type Components = {
-  basic_salary: number;
-  allowance: number;
-  deduction: number;
-  note: string;
-  version?: number;
+
+const MAX = 1000000000000;
+const PTKP = ["TK/0", "TK/1", "TK/2", "TK/3", "K/0", "K/1", "K/2", "K/3"];
+const TAX_METHODS: Record<string, string> = {
+  gross: "Gross — dipotong dari gaji",
+  gross_up: "Gross-up — ditanggung perusahaan",
+  none: "Manual — tidak dihitung otomatis",
 };
-function SalaryForm({
-  title,
-  path,
-  initial,
-  close,
+const JKK_RATES: [number, string][] = [
+  [24, "Kelas I · 0,24%"],
+  [54, "Kelas II · 0,54%"],
+  [89, "Kelas III · 0,89%"],
+  [127, "Kelas IV · 1,27%"],
+  [174, "Kelas V · 1,74%"],
+];
+// Line codes HR may edit on a draft slip; BPJS and PPh 21 are recalculated.
+const INPUT_CODES = [
+  "BASIC",
+  "ALLOWANCE",
+  "OVERTIME",
+  "THR",
+  "ADJUSTMENT",
+  "DEDUCTION",
+];
+
+type Row = {
+  key: number;
+  kind: string;
+  code: string;
+  name: string;
+  amount: number;
+  fixed: boolean;
+  taxable: boolean;
+};
+let nextKey = 1;
+const toRow = (v: Omit<Row, "key" | "code"> & { code?: string }): Row => ({
+  key: nextKey++,
+  code: "",
+  ...v,
+});
+const isEarning = (kind: string) => kind === "allowance" || kind === "earning";
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+  disabled,
 }: {
-  title: string;
-  path: string;
-  initial: Components;
-  close: () => void;
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
+  return (
+    <label>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function LineEditor({
+  rows,
+  setRows,
+  addEarning,
+  addDeduction,
+}: {
+  rows: Row[];
+  setRows: (rows: Row[]) => void;
+  addEarning: { label: string; row: () => Row };
+  addDeduction: { label: string; row: () => Row };
+}) {
+  const update = (key: number, patch: Partial<Row>) =>
+    setRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  return (
+    <div className="line-editor">
+      {rows.map((r) => (
+        <div className="line-row" key={r.key}>
+          <input
+            aria-label="Nama komponen"
+            value={r.name}
+            maxLength={80}
+            required
+            onChange={(e) => update(r.key, { name: e.target.value })}
+          />
+          <input
+            aria-label={`Nominal ${r.name}`}
+            type="number"
+            min={0}
+            max={MAX}
+            step={1}
+            required
+            value={r.amount}
+            onChange={(e) => update(r.key, { amount: Number(e.target.value) })}
+          />
+          <div className="weekday-picker">
+            {isEarning(r.kind) ? (
+              <>
+                <Toggle
+                  label="Tetap"
+                  checked={r.fixed}
+                  onChange={(fixed) => update(r.key, { fixed })}
+                />
+                <Toggle
+                  label="Kena pajak"
+                  checked={r.taxable}
+                  onChange={(taxable) => update(r.key, { taxable })}
+                />
+              </>
+            ) : (
+              <span className="line-kind">Potongan</span>
+            )}
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={`Hapus ${r.name}`}
+            onClick={() => setRows(rows.filter((x) => x.key !== r.key))}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      ))}
+      <div className="row-actions">
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setRows([...rows, addEarning.row()])}
+        >
+          + {addEarning.label}
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setRows([...rows, addDeduction.row()])}
+        >
+          + {addDeduction.label}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SalaryForm({ salary, close }: { salary: Salary; close: () => void }) {
   const qc = useQueryClient();
   const m = useMutation({
-    mutationFn: (v: unknown) => api(path, "PUT", v),
+    mutationFn: (v: unknown) =>
+      api(`/salaries/${salary.employee_id}`, "PUT", v),
     onSuccess: () => {
       qc.invalidateQueries();
       close();
     },
   });
-  const [basic, setBasic] = useState(initial.basic_salary);
-  const [allowance, setAllowance] = useState(initial.allowance);
-  const [deduction, setDeduction] = useState(initial.deduction);
+  const [basic, setBasic] = useState(salary.basic_salary);
+  const [ptkp, setPtkp] = useState(salary.ptkp_status);
+  const [method, setMethod] = useState(salary.tax_method);
+  const [kes, setKes] = useState(salary.bpjs_kesehatan);
+  const [tk, setTk] = useState(salary.bpjs_ketenagakerjaan);
+  const [jp, setJp] = useState(salary.bpjs_pensiun);
+  const [overtime, setOvertime] = useState(salary.overtime_eligible);
+  const [rows, setRows] = useState<Row[]>(() =>
+    salary.components.map((c) => toRow(c)),
+  );
+  const earnings =
+    basic +
+    rows.filter((r) => isEarning(r.kind)).reduce((s, r) => s + r.amount, 0);
+  const deductions = rows
+    .filter((r) => !isEarning(r.kind))
+    .reduce((s, r) => s + r.amount, 0);
   return (
-    <Modal title={title} close={close}>
+    <Modal title={`Komponen gaji · ${salary.name}`} close={close}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           m.mutate({
             basic_salary: basic,
-            allowance,
-            deduction,
+            ptkp_status: ptkp,
+            tax_method: method,
+            bpjs_kesehatan: kes,
+            bpjs_ketenagakerjaan: tk,
+            bpjs_pensiun: tk && jp,
+            overtime_eligible: overtime,
             note: new FormData(e.currentTarget).get("note"),
-            version: initial.version || 0,
+            components: rows.map((r): SalaryComponent => ({
+              kind: r.kind as SalaryComponent["kind"],
+              name: r.name,
+              amount: r.amount,
+              fixed: r.fixed,
+              taxable: r.taxable,
+            })),
           });
         }}
       >
         <div className="form-grid">
-          <label>
-            Gaji pokok (IDR)
+          <label className="full">
+            Gaji pokok bulanan (IDR)
             <input
               type="number"
               min={0}
-              max={1000000000000}
+              max={MAX}
               step={1}
               value={basic}
               onChange={(e) => setBasic(Number(e.target.value))}
@@ -72,47 +234,99 @@ function SalaryForm({
             />
           </label>
           <label>
-            Total tunjangan (IDR)
-            <input
-              type="number"
-              min={0}
-              max={1000000000000}
-              step={1}
-              value={allowance}
-              onChange={(e) => setAllowance(Number(e.target.value))}
-              required
-            />
+            Status PTKP
+            <select value={ptkp} onChange={(e) => setPtkp(e.target.value)}>
+              {PTKP.map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
           </label>
           <label>
-            Total potongan (IDR)
-            <input
-              type="number"
-              min={0}
-              max={Math.min(1000000000000, basic + allowance)}
-              step={1}
-              value={deduction}
-              onChange={(e) => setDeduction(Number(e.target.value))}
-              required
-            />
+            Metode PPh 21
+            <select
+              value={method}
+              onChange={(e) =>
+                setMethod(e.target.value as Salary["tax_method"])
+              }
+            >
+              {Object.entries(TAX_METHODS).map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
+        <div className="field-label">Kepesertaan</div>
+        <div className="weekday-picker">
+          <Toggle label="BPJS Kesehatan" checked={kes} onChange={setKes} />
+          <Toggle
+            label="BPJS Ketenagakerjaan"
+            checked={tk}
+            onChange={(v) => {
+              setTk(v);
+              if (!v) setJp(false);
+            }}
+          />
+          <Toggle
+            label="Jaminan Pensiun"
+            checked={tk && jp}
+            disabled={!tk}
+            onChange={setJp}
+          />
+          <Toggle
+            label="Dapat lembur"
+            checked={overtime}
+            onChange={setOvertime}
+          />
+        </div>
+        <div className="field-label">Tunjangan dan potongan rutin</div>
+        <LineEditor
+          rows={rows}
+          setRows={setRows}
+          addEarning={{
+            label: "Tunjangan",
+            row: () =>
+              toRow({
+                kind: "allowance",
+                name: "",
+                amount: 0,
+                fixed: false,
+                taxable: true,
+              }),
+          }}
+          addDeduction={{
+            label: "Potongan",
+            row: () =>
+              toRow({
+                kind: "deduction",
+                name: "",
+                amount: 0,
+                fixed: false,
+                taxable: true,
+              }),
+          }}
+        />
         <label>
-          Rincian komponen / catatan
+          Catatan
           <textarea
             name="note"
-            defaultValue={initial.note}
+            defaultValue={salary.note}
             maxLength={1000}
-            rows={4}
-            placeholder="Contoh: tunjangan transport, bonus, potongan pajak/BPJS yang telah dihitung HR"
+            rows={2}
           />
         </label>
         <div className="payroll-total">
-          <span>Gaji bersih</span>
-          <strong>{rupiah(basic + allowance - deduction)}</strong>
+          <span>
+            Bruto {rupiah(earnings)} · potongan rutin {rupiah(deductions)}
+          </span>
+          <strong>{rupiah(earnings - deductions)}</strong>
         </div>
         <p className="form-hint">
-          Nominal rupiah bulat. Pajak, BPJS, prorata, dan pembayaran lembur
-          dimasukkan oleh HR; belum dihitung otomatis.
+          Tunjangan <b>tetap</b> menjadi dasar BPJS, upah lembur (1/173), dan
+          THR. BPJS dan PPh 21 (TER) dihitung otomatis saat payroll dibuat; gaji
+          pokok dan tunjangan diprorata untuk karyawan yang masuk atau keluar di
+          tengah periode.
         </p>
         <ErrorBox error={m.error} />
         <div className="modal-actions">
@@ -121,7 +335,7 @@ function SalaryForm({
           </button>
           <button
             className="primary"
-            disabled={m.isPending || deduction > basic + allowance}
+            disabled={m.isPending || deductions > earnings}
           >
             Simpan komponen
           </button>
@@ -130,18 +344,106 @@ function SalaryForm({
     </Modal>
   );
 }
+
+function SettingsForm({ close }: { close: () => void }) {
+  const q = useData<PayrollSettings>("/payroll/settings");
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: (v: PayrollSettings) => api("/payroll/settings", "PUT", v),
+    onSuccess: () => {
+      qc.invalidateQueries();
+      close();
+    },
+  });
+  return (
+    <Modal title="Pengaturan BPJS perusahaan" close={close}>
+      <ErrorBox error={q.error} />
+      {q.data ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const d = new FormData(e.currentTarget);
+            m.mutate({
+              jkk_rate: Number(d.get("jkk_rate")),
+              jp_wage_cap: Number(d.get("jp_wage_cap")),
+              kes_wage_cap: Number(d.get("kes_wage_cap")),
+            });
+          }}
+        >
+          <label>
+            Kelas risiko JKK
+            <select name="jkk_rate" defaultValue={q.data.jkk_rate}>
+              {JKK_RATES.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="form-grid">
+            <label>
+              Batas upah Jaminan Pensiun
+              <input
+                name="jp_wage_cap"
+                type="number"
+                min={0}
+                max={MAX}
+                defaultValue={q.data.jp_wage_cap}
+                required
+              />
+            </label>
+            <label>
+              Batas upah BPJS Kesehatan
+              <input
+                name="kes_wage_cap"
+                type="number"
+                min={0}
+                max={MAX}
+                defaultValue={q.data.kes_wage_cap}
+                required
+              />
+            </label>
+          </div>
+          <p className="form-hint">
+            Batas upah ditetapkan BPJS dan dapat berubah setiap tahun; perbarui
+            sebelum membuat payroll. Payroll menyimpan nilai yang berlaku saat
+            dibuat.
+          </p>
+          <ErrorBox error={m.error} />
+          <div className="modal-actions">
+            <button type="button" className="secondary" onClick={close}>
+              Batal
+            </button>
+            <button className="primary" disabled={m.isPending}>
+              Simpan pengaturan
+            </button>
+          </div>
+        </form>
+      ) : (
+        <Loading />
+      )}
+    </Modal>
+  );
+}
+
 export function Salaries() {
   const q = useData<Salary[]>("/salaries");
   const [edit, setEdit] = useState<Salary | null>(null);
+  const [settings, setSettings] = useState(false);
   return (
     <>
       <Heading
         eyebrow="COMPENSATION SETUP"
         title="Komponen gaji yang jelas."
-        description="Tetapkan komponen bulanan sebelum membuat draft payroll."
-      />
+        description="Tetapkan gaji, tunjangan, PTKP, dan kepesertaan BPJS sebelum membuat payroll."
+      >
+        <button className="secondary" onClick={() => setSettings(true)}>
+          <Settings2 size={15} />
+          Pengaturan BPJS
+        </button>
+      </Heading>
       <div className="notice">
-        Komponen ini menjadi nilai awal saat payroll dibuat. Perubahan
+        Komponen ini menjadi dasar perhitungan saat payroll dibuat. Perubahan
         berikutnya tidak mengubah slip yang sudah tersimpan.
       </div>
       <section className="panel">
@@ -156,56 +458,66 @@ export function Salaries() {
                   <th>KARYAWAN</th>
                   <th>GAJI POKOK</th>
                   <th>TUNJANGAN</th>
-                  <th>POTONGAN</th>
-                  <th>BERSIH</th>
+                  <th>POTONGAN RUTIN</th>
+                  <th>PAJAK & BPJS</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {q.data?.map((s) => (
-                  <tr key={s.employee_id}>
-                    <td>
-                      <strong>{s.name}</strong>
-                      <small className="block">
-                        {s.code}
-                        {!s.configured ? " · Belum diatur" : ""}
-                      </small>
-                    </td>
-                    <td>{rupiah(s.basic_salary)}</td>
-                    <td>{rupiah(s.allowance)}</td>
-                    <td>{rupiah(s.deduction)}</td>
-                    <td>
-                      <strong>
-                        {rupiah(s.basic_salary + s.allowance - s.deduction)}
-                      </strong>
-                    </td>
-                    <td>
-                      <button
-                        className="text-button"
-                        onClick={() => setEdit(s)}
-                      >
-                        Atur gaji
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {q.data?.map((s) => {
+                  const sum = (kind: string) =>
+                    s.components
+                      .filter((c) => c.kind === kind)
+                      .reduce((t, c) => t + c.amount, 0);
+                  const bpjs = [
+                    s.bpjs_kesehatan && "Kes",
+                    s.bpjs_ketenagakerjaan && "TK",
+                    s.bpjs_pensiun && "JP",
+                  ].filter(Boolean);
+                  return (
+                    <tr key={s.employee_id}>
+                      <td>
+                        <strong>{s.name}</strong>
+                        <small className="block">
+                          {s.code}
+                          {!s.configured ? " · Belum diatur" : ""}
+                        </small>
+                      </td>
+                      <td>{rupiah(s.basic_salary)}</td>
+                      <td>{rupiah(sum("allowance"))}</td>
+                      <td>{rupiah(sum("deduction"))}</td>
+                      <td>
+                        {s.ptkp_status} ·{" "}
+                        {s.tax_method === "none"
+                          ? "manual"
+                          : s.tax_method.replace("_", "-")}
+                        <small className="block">
+                          BPJS {bpjs.length ? bpjs.join(", ") : "—"}
+                        </small>
+                      </td>
+                      <td>
+                        <button
+                          className="text-button"
+                          onClick={() => setEdit(s)}
+                        >
+                          Atur gaji
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {!q.data?.length && <Empty />}
           </div>
         )}
       </section>
-      {edit && (
-        <SalaryForm
-          title={`Komponen gaji · ${edit.name}`}
-          path={`/salaries/${edit.employee_id}`}
-          initial={edit}
-          close={() => setEdit(null)}
-        />
-      )}
+      {edit && <SalaryForm salary={edit} close={() => setEdit(null)} />}
+      {settings && <SettingsForm close={() => setSettings(false)} />}
     </>
   );
 }
+
 export function Payroll() {
   const q = useData<PayrollRun[]>("/payroll");
   const qc = useQueryClient();
@@ -216,8 +528,8 @@ export function Payroll() {
     action: string;
   } | null>(null);
   const create = useMutation({
-    mutationFn: (period: string) =>
-      api<{ id: number }>("/payroll", "POST", { period }),
+    mutationFn: (v: { period: string; thr_date: string }) =>
+      api<{ id: number }>("/payroll", "POST", v),
     onSuccess: (d) => {
       qc.invalidateQueries();
       setOpen(false);
@@ -245,7 +557,7 @@ export function Payroll() {
             ? `Payroll ${selectedRun.period}`
             : "Gaji terhitung. Tim terjaga."
         }
-        description="Siapkan draft, verifikasi komponen, lalu terbitkan slip gaji."
+        description="Buat draft, verifikasi perhitungan, lalu terbitkan slip gaji."
       >
         {selected ? (
           <button className="secondary" onClick={() => setSelected(null)}>
@@ -273,7 +585,14 @@ export function Payroll() {
               <Badge status={selectedRun.status} />
               <h2>{rupiah(selectedRun.total)}</h2>
               <p>
-                {selectedRun.employees} karyawan ·{" "}
+                {selectedRun.employees} karyawan · PPh 21{" "}
+                {rupiah(selectedRun.tax)} · BPJS perusahaan{" "}
+                {rupiah(selectedRun.employer_cost)}
+                {selectedRun.thr_date
+                  ? ` · THR hari raya ${selectedRun.thr_date}`
+                  : ""}
+              </p>
+              <p>
                 {selectedRun.payment_reference ||
                   "Belum ada referensi pembayaran"}
               </p>
@@ -327,6 +646,7 @@ export function Payroll() {
                   <th>PERIODE</th>
                   <th>KARYAWAN</th>
                   <th>TOTAL GAJI BERSIH</th>
+                  <th>PPH 21</th>
                   <th>STATUS</th>
                   <th />
                 </tr>
@@ -336,9 +656,11 @@ export function Payroll() {
                   <tr key={r.id}>
                     <td>
                       <strong>{r.period}</strong>
+                      {r.thr_date && <small className="block">+ THR</small>}
                     </td>
                     <td>{r.employees}</td>
                     <td>{rupiah(r.total)}</td>
+                    <td>{rupiah(r.tax)}</td>
                     <td>
                       <Badge status={r.status} />
                     </td>
@@ -368,9 +690,11 @@ export function Payroll() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              create.mutate(
-                String(new FormData(e.currentTarget).get("period")),
-              );
+              const d = new FormData(e.currentTarget);
+              create.mutate({
+                period: String(d.get("period")),
+                thr_date: d.get("with_thr") ? String(d.get("thr_date")) : "",
+              });
             }}
           >
             <label>
@@ -384,10 +708,13 @@ export function Payroll() {
                 required
               />
             </label>
+            <ThrFields />
             <p className="notice">
-              Seluruh karyawan aktif yang sudah bergabung pada periode ini akan
-              disertakan. Komponen gaji harus lengkap. Nilai disalin sebagai
-              snapshot dan dapat disesuaikan selama draft.
+              Karyawan aktif dan karyawan yang keluar pada periode ini
+              disertakan, diprorata per hari kerja. Lembur yang disetujui dan
+              belum dibayar ikut dihitung. BPJS dan PPh 21 (TER; Desember atau
+              bulan keluar memakai perhitungan tahunan) dihitung otomatis.
+              Periode sebelumnya harus sudah difinalisasi.
             </p>
             <ErrorBox error={create.error} />
             <div className="modal-actions">
@@ -440,14 +767,14 @@ export function Payroll() {
               </>
             ) : action.action === "finalize" ? (
               <p className="notice">
-                Setelah finalisasi, nominal terkunci dan slip dapat dilihat oleh
-                masing-masing karyawan. Pastikan pajak, BPJS, prorata, dan
-                penyesuaian lain sudah diverifikasi.
+                Setelah finalisasi, nominal terkunci, slip dapat dilihat oleh
+                masing-masing karyawan, dan PPh 21 periode ini menjadi dasar
+                perhitungan tahunan. Pastikan seluruh slip sudah diverifikasi.
               </p>
             ) : (
               <p className="notice">
-                Draft dibatalkan dan tidak ditampilkan kepada karyawan. Anda
-                dapat membuat payroll baru untuk periode yang sama.
+                Draft dibatalkan dan tidak ditampilkan kepada karyawan. Lembur
+                di dalamnya kembali tersedia untuk payroll berikutnya.
               </p>
             )}
             <ErrorBox error={change.error} />
@@ -469,6 +796,38 @@ export function Payroll() {
     </>
   );
 }
+
+function ThrFields() {
+  const [withThr, setWithThr] = useState(false);
+  return (
+    <>
+      <div className="weekday-picker">
+        <Toggle
+          label="Sertakan THR keagamaan"
+          checked={withThr}
+          onChange={setWithThr}
+        />
+        {withThr && <input type="hidden" name="with_thr" value="1" />}
+      </div>
+      {withThr && (
+        <label>
+          Tanggal hari raya
+          <input name="thr_date" type="date" required />
+          <span className="form-hint">
+            Masa kerja dihitung sampai tanggal ini: ≥12 bulan mendapat 1 bulan
+            upah tetap, 1–12 bulan proporsional.
+          </span>
+        </label>
+      )}
+    </>
+  );
+}
+
+const sumCodes = (s: Payslip, ...codes: string[]) =>
+  s.lines
+    .filter((l) => codes.includes(l.code))
+    .reduce((t, l) => t + l.amount, 0);
+
 function PayrollEntries({ run }: { run: PayrollRun }) {
   const q = useData<Payslip[]>(`/payroll/${run.id}/slips`);
   const [edit, setEdit] = useState<Payslip | null>(null);
@@ -481,20 +840,39 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
         .replaceAll('"', '""') +
       '"';
     const text = [
-      ["NIK", "Nama", "Gaji pokok", "Tunjangan", "Potongan", "Gaji bersih"],
+      [
+        "NIK",
+        "Nama",
+        "PTKP",
+        "Hari kerja",
+        "Gaji pokok",
+        "Pendapatan lain",
+        "Bruto pajak",
+        "PPh 21",
+        "BPJS karyawan",
+        "Total potongan",
+        "Gaji bersih",
+        "BPJS perusahaan",
+      ],
       ...(q.data || []).map((s) => [
         s.employee_code,
         s.employee_name,
+        s.ptkp_status,
+        `${s.worked_days}/${s.period_days}`,
         s.basic_salary,
         s.allowance,
+        s.taxable_gross,
+        s.pph21,
+        sumCodes(s, "BPJS_KES_EE", "JHT_EE", "JP_EE"),
         s.deduction,
         s.net,
+        s.employer_cost,
       ]),
     ]
       .map((row) => row.map(cell).join(","))
       .join("\r\n");
     const url = URL.createObjectURL(
-      new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" }),
+      new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" }),
     );
     const a = document.createElement("a");
     a.href = url;
@@ -507,7 +885,7 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
       <div className="panel-head">
         <div>
           <h2>Rincian slip gaji</h2>
-          <p>Snapshot komponen pada periode ini.</p>
+          <p>Snapshot perhitungan pada periode ini.</p>
         </div>
         <button className="secondary" onClick={csv} disabled={!q.data?.length}>
           <Download size={15} />
@@ -523,9 +901,9 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
             <thead>
               <tr>
                 <th>KARYAWAN</th>
-                <th>GAJI POKOK</th>
-                <th>TUNJANGAN</th>
-                <th>POTONGAN</th>
+                <th>PENDAPATAN</th>
+                <th>BPJS</th>
+                <th>PPH 21</th>
                 <th>BERSIH</th>
                 <th />
               </tr>
@@ -535,11 +913,24 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
                 <tr key={s.id}>
                   <td>
                     {s.employee_name}
-                    <small className="block">{s.employee_code}</small>
+                    <small className="block">
+                      {s.employee_code} · {s.ptkp_status}
+                      {s.worked_days < s.period_days &&
+                        ` · prorata ${s.worked_days}/${s.period_days} hari`}
+                      {s.final_period && " · PPh tahunan"}
+                    </small>
                   </td>
-                  <td>{rupiah(s.basic_salary)}</td>
-                  <td>{rupiah(s.allowance)}</td>
-                  <td>{rupiah(s.deduction)}</td>
+                  <td>{rupiah(s.basic_salary + s.allowance)}</td>
+                  <td>
+                    {rupiah(sumCodes(s, "BPJS_KES_EE", "JHT_EE", "JP_EE"))}
+                  </td>
+                  <td>
+                    {s.tax_method === "none"
+                      ? "Manual"
+                      : s.pph21 < 0
+                        ? `− ${rupiah(-s.pph21)}`
+                        : rupiah(s.pph21)}
+                  </td>
                   <td>
                     <strong>{rupiah(s.net)}</strong>
                   </td>
@@ -550,7 +941,7 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
                           className="text-button"
                           onClick={() => setEdit(s)}
                         >
-                          Edit
+                          Sesuaikan
                         </button>
                       )}
                       <button
@@ -567,15 +958,98 @@ function PayrollEntries({ run }: { run: PayrollRun }) {
           </table>
         </div>
       )}
-      {edit && (
-        <SalaryForm
-          title={`Penyesuaian · ${edit.employee_name}`}
-          path={`/payroll/slips/${edit.id}`}
-          initial={edit}
-          close={() => setEdit(null)}
-        />
-      )}{" "}
+      {edit && <SlipForm slip={edit} close={() => setEdit(null)} />}
       {slip && <SlipModal slip={slip} close={() => setSlip(null)} />}
     </section>
+  );
+}
+
+function SlipForm({ slip, close }: { slip: Payslip; close: () => void }) {
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: (v: unknown) => api(`/payroll/slips/${slip.id}`, "PUT", v),
+    onSuccess: () => {
+      qc.invalidateQueries();
+      close();
+    },
+  });
+  const [rows, setRows] = useState<Row[]>(() =>
+    slip.lines.filter((l) => INPUT_CODES.includes(l.code)).map((l) => toRow(l)),
+  );
+  const statutory = slip.lines.filter((l) => !INPUT_CODES.includes(l.code));
+  return (
+    <Modal title={`Penyesuaian · ${slip.employee_name}`} close={close}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          m.mutate({
+            version: slip.version,
+            note: new FormData(e.currentTarget).get("note"),
+            lines: rows.map((r): PayrollLine => ({
+              kind: r.kind as PayrollLine["kind"],
+              code: r.code,
+              name: r.name,
+              amount: r.amount,
+              fixed: r.fixed,
+              taxable: r.taxable,
+            })),
+          });
+        }}
+      >
+        <div className="field-label">Pendapatan dan potongan</div>
+        <LineEditor
+          rows={rows}
+          setRows={setRows}
+          addEarning={{
+            label: "Pendapatan (bonus, insentif…)",
+            row: () =>
+              toRow({
+                kind: "earning",
+                code: "ADJUSTMENT",
+                name: "",
+                amount: 0,
+                fixed: false,
+                taxable: true,
+              }),
+          }}
+          addDeduction={{
+            label: "Potongan (kasbon, unpaid leave…)",
+            row: () =>
+              toRow({
+                kind: "deduction",
+                code: "ADJUSTMENT",
+                name: "",
+                amount: 0,
+                fixed: false,
+                taxable: false,
+              }),
+          }}
+        />
+        {statutory.length > 0 && (
+          <p className="form-hint">
+            Dihitung ulang saat disimpan:{" "}
+            {statutory.map((l) => `${l.name} ${rupiah(l.amount)}`).join(" · ")}
+          </p>
+        )}
+        <label>
+          Catatan
+          <textarea
+            name="note"
+            defaultValue={slip.note}
+            maxLength={1000}
+            rows={2}
+          />
+        </label>
+        <ErrorBox error={m.error} />
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={close}>
+            Batal
+          </button>
+          <button className="primary" disabled={m.isPending || !rows.length}>
+            Simpan dan hitung ulang
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

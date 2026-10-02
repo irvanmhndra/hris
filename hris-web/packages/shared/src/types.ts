@@ -17,6 +17,7 @@ export interface Employee {
   position: string;
   status: "active" | "inactive";
   joined_on: string;
+  left_on: string | null;
 }
 export interface Department {
   id: number;
@@ -106,15 +107,32 @@ export interface AuditLog {
   summary: string;
   created_at: string;
 }
+export interface SalaryComponent {
+  kind: "allowance" | "deduction";
+  name: string;
+  amount: number;
+  fixed: boolean;
+  taxable: boolean;
+}
 export interface Salary {
   employee_id: number;
   name: string;
   code: string;
   configured: boolean;
   basic_salary: number;
-  allowance: number;
-  deduction: number;
+  ptkp_status: string;
+  tax_method: "gross" | "gross_up" | "none";
+  bpjs_kesehatan: boolean;
+  bpjs_ketenagakerjaan: boolean;
+  bpjs_pensiun: boolean;
+  overtime_eligible: boolean;
   note: string;
+  components: SalaryComponent[];
+}
+export interface PayrollSettings {
+  jkk_rate: number;
+  jp_wage_cap: number;
+  kes_wage_cap: number;
 }
 export interface PayrollRun {
   id: number;
@@ -122,8 +140,19 @@ export interface PayrollRun {
   status: string;
   employees: number;
   total: number;
+  tax: number;
+  employer_cost: number;
+  thr_date: string | null;
   payment_reference: string;
   created_at: string;
+}
+export interface PayrollLine {
+  kind: "earning" | "deduction" | "employer";
+  code: string;
+  name: string;
+  amount: number;
+  taxable: boolean;
+  fixed: boolean;
 }
 export interface Payslip {
   id: number;
@@ -138,8 +167,17 @@ export interface Payslip {
   allowance: number;
   deduction: number;
   net: number;
+  ptkp_status: string;
+  tax_method: string;
+  final_period: boolean;
+  worked_days: number;
+  period_days: number;
+  taxable_gross: number;
+  pph21: number;
+  employer_cost: number;
   note: string;
   version: number;
+  lines: PayrollLine[];
 }
 export interface Pagination {
   current_page: number;
