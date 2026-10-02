@@ -5,18 +5,20 @@ Aplikasi HRIS dengan API Go, web admin, dan portal karyawan. Arsitektur mengikut
 ## Fitur
 
 - Login per perusahaan, session token tersimpan sebagai hash, logout, dan pembatasan akses admin/karyawan.
+- Lupa password via email (tautan sekali pakai 1 jam) dan pendaftaran perusahaan mandiri (opsional, `SIGNUP_ENABLED`).
 - Dashboard: karyawan aktif, kehadiran hari ini, pengajuan menunggu, dan komposisi departemen.
 - Departemen: daftar dan tambah.
 - Karyawan: daftar berhalaman dengan pencarian dan filter di server, tambah, edit, nonaktifkan, reset password melalui admin, dan ekspor CSV seluruh hasil filter.
 - Akun portal dibuat bersama karyawan dalam transaksi database.
-- Absensi: check-in/check-out satu kali per hari, riwayat 100 catatan terbaru, zona waktu Asia/Jakarta.
-- Cuti tahunan/sakit/izin: pengajuan berdasarkan hari kerja, saldo per tahun, reservasi pengajuan pending, persetujuan/penolakan, dan pembatalan.
+- Absensi: shift (termasuk shift malam) dengan toleransi terlambat, jadwal per tanggal, keterlambatan dan pulang cepat, check-in berbasis lokasi GPS dengan radius, rekap bulanan (hadir, terlambat, cuti, tanpa keterangan), riwayat berhalaman. Zona waktu Asia/Jakarta.
+- Cuti tahunan/sakit/izin/tidak dibayar: pengajuan berdasarkan hari kerja, saldo per tahun dengan akrual tahunan atau bulanan, masa tunggu, dan carry-over, reservasi pengajuan pending, persetujuan/penolakan, dan pembatalan. Cuti tidak dibayar mengurangi gaji.
 - Kalender kerja dan hari libur perusahaan; kuota cuti dapat diatur per karyawan/tahun.
-- Pengajuan lembur dan koreksi absensi dengan persetujuan HR.
+- Pengajuan lembur dan koreksi absensi (boleh melewati tengah malam).
+- Persetujuan dua tingkat: atasan langsung meneruskan atau menolak, lalu HR memutuskan.
 - Profil kontak dan kontak darurat yang dapat diperbarui karyawan.
-- Pengumuman dan dokumen kebijakan berbasis tautan HTTPS, dengan draft/publikasi/arsip.
-- Checklist onboarding, inventaris dan penugasan aset, target kinerja dan progres, serta pipeline kandidat rekrutmen.
-- Payroll bulanan: komponen gaji, snapshot draft, penyesuaian, finalisasi, ekspor CSV, slip pribadi yang bisa dicetak, dan pencatatan pembayaran manual.
+- Pengumuman dan dokumen kebijakan dengan unggahan file (maks. 10 MB) atau tautan HTTPS, dengan draft/publikasi/arsip.
+- Checklist onboarding, inventaris dan penugasan aset, target kinerja dan progres, serta pipeline kandidat rekrutmen yang dapat langsung dijadikan karyawan.
+- Payroll bulanan Indonesia: PPh 21 TER, BPJS, lembur, THR, prorata, komponen gaji, penyesuaian, finalisasi, ekspor CSV, slip terperinci yang bisa dicetak, dan pencatatan pembayaran manual.
 - Riwayat aktivitas modul HR/payroll, seluruh riwayat dengan pagination.
 - Tema indigo, sidebar responsif, dan portal khusus karyawan.
 - Semua data dibatasi `company_id`; karyawan hanya dapat melihat absensi dan cutinya sendiri.
@@ -137,15 +139,15 @@ make migrate          # sekarang: tidak ada perubahan
 
 Bila database baru sampai 000002, jalankan `cd hris-api && go run ./cmd/migrate force 2`, lalu `make migrate` untuk menerapkan 000003 dan 000004. Untuk Compose, pakai `docker compose run --rm migrate ./migrate force 4` sebelum `docker compose up -d`.
 
-Migrasi 000003/000004/000005 bersifat forward-only. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
+Migrasi 000003–000006 bersifat forward-only; 000007 dan 000008 dapat di-rollback. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
 
 ## Batas implementasi saat ini
 
-Payroll menghitung PPh 21, BPJS, prorata, lembur, dan THR secara otomatis dengan pembayaran manual. Belum ada transfer bank, laporan e-Bupot/SPT, koreksi payroll setelah finalisasi, cuti tidak dibayar otomatis, atau saldo PPh dari sistem lain (karyawan yang pindah di tengah tahun dihitung dari periode yang tercatat di HRIS saja). Karyawan keluar tanpa tanggal keluar (data lama) tidak ikut payroll berikutnya.
+Payroll menghitung PPh 21, BPJS, prorata, lembur, cuti tidak dibayar, dan THR secara otomatis dengan pembayaran manual. Belum ada transfer bank, laporan e-Bupot/SPT, koreksi payroll setelah finalisasi, potongan keterlambatan otomatis, atau saldo PPh dari sistem lain (karyawan yang pindah di tengah tahun dihitung dari periode yang tercatat di HRIS saja). Karyawan keluar tanpa tanggal keluar (data lama) tidak ikut payroll berikutnya.
 
-Approval masih satu tingkat. Kalender kerja belum menjadi penjadwalan shift atau aturan keterlambatan; absensi/koreksi belum mendukung shift lintas tengah malam dan GPS/biometrik. Kuota cuti belum memiliki accrual/carry-over otomatis. Dokumen berupa tautan, tanpa upload/tanda tangan; izin file tetap diatur pada penyedia file. Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen mencatat kandidat dan tahapan, tanpa portal lowongan atau konversi otomatis menjadi karyawan.
+Persetujuan maksimal dua tingkat (atasan langsung, lalu HR). Carry-over cuti hanya membawa sisa hak tahun sebelumnya dan tidak memiliki tanggal kedaluwarsa. Lokasi absensi memakai GPS browser (dapat dipalsukan perangkat); belum ada biometrik atau selfie. Dokumen berupa unggahan file atau tautan, tanpa tanda tangan; file disimpan di disk lokal (`UPLOAD_DIR`), belum di object storage. Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen tanpa portal lowongan publik.
 
-Session berlaku 12 jam, tanpa refresh token atau lupa-password mandiri. Manajemen perusahaan dilakukan lewat provisioning database; UI registrasi perusahaan belum tersedia. Pagination server tersedia untuk karyawan dan audit log; daftar lain (absensi 100 terbaru, cuti, modul HR) masih dikembalikan utuh.
+Session berlaku 12 jam, tanpa refresh token. Reset password membutuhkan SMTP (`SMTP_HOST`); tanpa itu email ditulis ke log, hanya untuk pengembangan.
 
 Konfigurasi Compose dan akun demo ditujukan untuk pengembangan lokal. Untuk deployment, gunakan kredensial terpisah dan reverse proxy HTTPS: `/api` diteruskan ke API dan rute SPA ke `index.html`. `vite preview` tidak menyediakan proxy API pengembangan.
 
