@@ -38,7 +38,7 @@ Tanggal absensi mengikuti Asia/Jakarta; timestamp disimpan dengan timezone. Cuti
 
 ## Migrasi
 
-Migrasi `000001` membuat tabel dasar, `000002` memperkuat relasi akun-karyawan, `000003` menambah kalender/saldo/profil/workflow/audit, dan `000004` menambah payroll. File SQL di-embed ke binary dan dijalankan golang-migrate (`cmd/migrate`), yang mencatat versi di `schema_migrations`. Di Compose, service `migrate` berjalan sekali setelah database healthy dan API baru start setelah migrasi sukses; migrasi baru otomatis sampai ke database yang sudah ada.
+Migrasi `000001` membuat tabel dasar, `000002` memperkuat relasi akun-karyawan, `000003` menambah kalender/saldo/profil/workflow/audit, `000004` menambah payroll, dan `000005` menambah perhitungan payroll Indonesia (komponen gaji, baris slip, pengaturan BPJS, `employees.left_on`). File SQL di-embed ke binary dan dijalankan golang-migrate (`cmd/migrate`), yang mencatat versi di `schema_migrations`. Di Compose, service `migrate` berjalan sekali setelah database healthy dan API baru start setelah migrasi sukses; migrasi baru otomatis sampai ke database yang sudah ada.
 
 Dua pengaman: `up` menolak schema yang sudah berisi tabel tetapi belum punya `schema_migrations` (hasil setup initdb.d lama) alih-alih menjalankan ulang `000001` dan meninggalkan status dirty; `down` memeriksa setiap langkah lebih dulu dan menolak migrasi yang ditandai `-- Forward-only` (000003, 000004) sebelum menyentuh database. Tes integrasi menjalankan runner yang sama dua kali untuk memastikan idempoten.
 
@@ -48,10 +48,10 @@ Dua pengaman: `up` menolak schema yang sudah berisi tabel tetapi belum punya `sc
 
 ## Workflow dan konsistensi
 
-`hr_items` menyimpan workflow ringan dalam satu tabel, dengan whitelist modul/status, data JSONB yang dipetakan ke DTO bertipe, serta scope tenant dan pemilik. Modul finansial memakai tabel khusus: `salary_profiles`, `payroll_runs`, dan `payroll_entries`. Nominal rupiah berupa integer, bukan floating point.
+`hr_items` menyimpan workflow ringan dalam satu tabel, dengan whitelist modul/status, data JSONB yang dipetakan ke DTO bertipe, serta scope tenant dan pemilik. Modul finansial memakai tabel khusus: `salary_profiles`, `salary_components`, `payroll_settings`, `payroll_runs`, `payroll_entries`, `payroll_lines`, dan `payroll_overtime`. Nominal rupiah berupa integer, bukan floating point.
 
 Saldo cuti tahunan adalah kuota dikurangi hari approved dan pending. Transaksi mengunci karyawan, memeriksa overlap dan kuota per tahun, lalu menyimpan `leave_days`. Penolakan/pembatalan melepaskan reservasi. Perubahan kalender tidak menghitung ulang snapshot cuti. Alokasi yang sudah dipakai dibekukan agar perubahan kuota default tidak mengubah hak sebelumnya.
 
 Workflow memakai kolom versi untuk menolak edit basi. Lembur memeriksa overlap; koreksi absensi menyimpan fingerprint data asal dan menolak approval jika absensi sudah berubah. Approval koreksi dan perubahan absensi berlangsung dalam transaksi yang sama.
 
-Pembuatan payroll menggunakan snapshot transaksi repeatable-read. Pengeditan slip mengunci periode dan memeriksa versi; finalisasi mengunci nominal dan menerbitkan slip. Karyawan hanya dapat membaca slip miliknya yang final/paid. Status paid membutuhkan referensi pembayaran manual, tanpa integrasi transfer. Audit modul baru ditulis dalam transaksi perubahan.
+Aturan payroll Indonesia (PPh 21 TER, Pasal 17 tahunan, BPJS, lembur, THR, prorata) berada di paket murni `internal/payroll` tanpa akses database. Repository membaca input run dalam snapshot transaksi repeatable-read lalu memanggil fungsi `build` dari service, sehingga perhitungan tetap di service tetapi berjalan atas data yang konsisten. Pengeditan slip mengunci periode dan memeriksa versi; finalisasi mengunci nominal dan menerbitkan slip. Karyawan hanya dapat membaca slip miliknya yang final/paid. Status paid membutuhkan referensi pembayaran manual, tanpa integrasi transfer. Audit modul baru ditulis dalam transaksi perubahan.

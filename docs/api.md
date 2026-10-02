@@ -108,16 +108,31 @@ Body action: `{"action":"approve","version":1}`. Penolakan memerlukan `note` min
 
 | Method | Endpoint | Akses | Fungsi |
 |---|---|---|---|
-| GET | /salaries | admin | Komponen gaji karyawan |
-| PUT | /salaries/:employeeId | admin | Simpan komponen default |
-| GET / POST | /payroll | admin | Daftar / buat `{period:"2026-09"}` |
-| GET | /payroll/:id/slips | admin | Snapshot slip suatu periode |
-| PUT | /payroll/slips/:id | admin | Edit snapshot selama draft, wajib version |
+| GET | /salaries | admin | Profil gaji karyawan aktif + komponen |
+| PUT | /salaries/:employeeId | admin | Simpan profil gaji (lihat body di bawah) |
+| GET / PUT | /payroll/settings | admin | Kelas JKK dan batas upah BPJS perusahaan |
+| GET / POST | /payroll | admin | Daftar / buat `{"period":"2026-09","thr_date":"2026-03-20"}` (`thr_date` opsional) |
+| GET | /payroll/:id/slips | admin | Slip suatu periode, termasuk `lines` |
+| PUT | /payroll/slips/:id | admin | Sesuaikan baris slip draft lalu hitung ulang, wajib version |
 | PATCH | /payroll/:id/action | admin | finalize / paid / void |
 | GET | /payslips | karyawan | Slip sendiri yang finalized atau paid |
 
-Body komponen: `{"basic_salary":8000000,"allowance":750000,"deduction":250000,"note":"Rincian penyesuaian HR","version":1}`. Nominal integer rupiah non-negatif, maksimal 1 triliun per komponen; potongan tidak boleh melebihi pokok+tunjangan. Version digunakan pada edit snapshot slip. Perhitungan net otomatis; kalkulasi pajak/BPJS/prorata/lembur belum otomatis.
+Body profil gaji:
 
-Satu periode hanya boleh memiliki satu payroll non-void. Pembuatan membutuhkan konfigurasi gaji seluruh karyawan aktif yang bergabung sebelum akhir periode. Komponen disalin; perubahan default kemudian tidak mengubah snapshot. Draft dapat diedit atau void. Finalisasi mengunci nominal dan menerbitkan slip. Final/paid tidak dapat dibatalkan atau diedit.
+```json
+{"basic_salary":8000000,"ptkp_status":"K/1","tax_method":"gross",
+ "bpjs_kesehatan":true,"bpjs_ketenagakerjaan":true,"bpjs_pensiun":true,"overtime_eligible":true,
+ "note":"","components":[
+  {"kind":"allowance","name":"Tunjangan jabatan","amount":750000,"fixed":true,"taxable":true},
+  {"kind":"deduction","name":"Koperasi","amount":100000}]}
+```
+
+`ptkp_status`: TK/0–TK/3, K/0–K/3. `tax_method`: `gross` (dipotong dari gaji), `gross_up` (perusahaan memberi tunjangan PPh sebesar pajaknya), `none` (PPh 21 tidak dihitung; dipakai profil lama). Jaminan Pensiun membutuhkan BPJS Ketenagakerjaan. Tunjangan `fixed` (tetap) menjadi dasar BPJS, upah lembur, dan THR. Nominal integer rupiah 0–1 triliun.
+
+Settings: `{"jkk_rate":24,"jp_wage_cap":10547400,"kes_wage_cap":12000000}`. `jkk_rate` dalam perseratus persen (24 = 0,24%; kelas 24/54/89/127/174).
+
+Penyesuaian slip: `{"version":1,"note":"","lines":[{"kind":"earning","code":"ADJUSTMENT","name":"Bonus","amount":1000000,"taxable":true,"fixed":false}, …]}`. Kirim seluruh baris non-statutori (kode `BASIC`, `ALLOWANCE`, `OVERTIME`, `THR`, `ADJUSTMENT`, `DEDUCTION`); baris BPJS, PPh 21, tunjangan PPh, dan pengembalian PPh selalu dihitung ulang dan ditolak bila dikirim.
+
+Satu periode hanya boleh memiliki satu payroll non-void; payroll periode sebelumnya harus sudah final/paid, dan periode baru tidak boleh disisipkan sebelum payroll lain pada tahun yang sama. Pembuatan membutuhkan profil gaji untuk seluruh karyawan aktif yang bergabung sebelum akhir periode serta karyawan yang keluar pada/sesudah awal periode. Draft dapat disesuaikan atau di-void (lembur di dalamnya kembali tersedia). Finalisasi mengunci nominal dan menerbitkan slip. Final/paid tidak dapat dibatalkan atau diedit.
 
 Body tindakan: `{"action":"finalize"}`, `{"action":"void"}`, atau `{"action":"paid","reference":"TRANSFER-MANUAL-001"}`. Referensi paid wajib 5–150 karakter. Tindakan paid **hanya mencatat pembayaran yang dilakukan di luar aplikasi**. Tidak ada pemanggilan payment gateway atau transfer bank.

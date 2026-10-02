@@ -102,15 +102,22 @@ make build    # API binary + production build kedua portal
 
 Tes integrasi membuat schema unik, menjalankan migrasi lewat runner, menguji workflow, lalu menghapus schema miliknya sendiri. Data aplikasi tidak dihapus. `go test ./...` tanpa `TEST_DATABASE_URL` melewatkan tes integrasi secara eksplisit. Unit test service (aturan otorisasi dan scope) tidak butuh database. GitHub Actions (`.github/workflows/ci.yml`) menjalankan lint, unit + integration test dengan PostgreSQL, uji migrasi, govulncheck, serta typecheck dan build web pada setiap PR ke `main`.
 
-## Payroll tanpa payment gateway
+## Payroll Indonesia
 
-1. Atur **Komponen gaji** setiap karyawan aktif: gaji pokok, total tunjangan, total potongan, dan catatan.
-2. Buat payroll untuk periode bulanan. Sistem menyalin komponen untuk karyawan yang saat ini aktif dan sudah bergabung sebelum akhir periode.
-3. Sesuaikan draft, termasuk pajak/BPJS, prorata, atau nominal lembur yang sudah dihitung HR. Gaji bersih dihitung otomatis: pokok + tunjangan − potongan.
-4. Finalisasi setelah diverifikasi. Nominal terkunci dan slip tersedia pada portal masing-masing karyawan.
-5. Lakukan pembayaran di luar aplikasi, lalu catat referensinya dengan **Catat sudah dibayar**. Tombol ini hanya mencatat pembayaran; tidak mengirim uang.
+1. **Pengaturan BPJS** (halaman Komponen gaji): kelas risiko JKK dan batas upah Jaminan Pensiun/BPJS Kesehatan. Perbarui batas upah ketika BPJS mengumumkan nilai baru.
+2. **Komponen gaji** per karyawan: gaji pokok, tunjangan (tetap/tidak tetap, kena pajak/tidak), potongan rutin, status PTKP, metode PPh 21 (gross, gross-up, atau manual), kepesertaan BPJS, dan hak lembur.
+3. **Buat payroll** bulanan, opsional dengan tanggal hari raya untuk THR. Sistem menghitung:
+   - prorata gaji pokok dan tunjangan per hari kerja kalender perusahaan untuk karyawan yang masuk atau keluar (tanggal keluar diisi saat karyawan dinonaktifkan);
+   - lembur yang disetujui dan belum dibayar: upah per jam 1/173 × (pokok + tunjangan tetap), hari kerja 1,5× jam pertama lalu 2×, hari libur 2×/3×/4× (PP 35/2021, 5 atau 6 hari kerja);
+   - THR: 1 bulan upah tetap untuk masa kerja ≥12 bulan, proporsional untuk 1–12 bulan;
+   - BPJS Kesehatan 4%+1% (batas upah), JHT 3,7%+2%, JP 2%+1% (batas upah), JKK sesuai kelas, JKM 0,3%;
+   - PPh 21 TER bulanan (PP 58/2023) atas bruto termasuk premi JKK/JKM/BPJS Kesehatan perusahaan; Desember atau bulan keluar memakai tarif Pasal 17 setahun dikurangi PPh yang sudah dipotong (bisa menjadi pengembalian). Gross-up menambahkan tunjangan PPh sebesar pajaknya.
+4. **Sesuaikan** slip draft (bonus, kasbon, koreksi) — BPJS dan PPh 21 dihitung ulang otomatis.
+5. **Finalisasi**, lalu bayar di luar aplikasi dan **Catat sudah dibayar** dengan referensinya.
 
-Data demo tambahan tersedia melalui `make seed-hr` setelah seed dasar. Nominalnya fiktif, bukan hasil perhitungan pajak. Seed tambahan tidak menimpa komponen gaji yang sudah ada.
+Profil gaji dan slip yang dibuat sebelum migrasi 000005 tetap memakai metode pajak manual tanpa BPJS, sehingga nominal lamanya tidak berubah. Ubah ke gross/gross-up dan aktifkan BPJS di Komponen gaji untuk memakai perhitungan otomatis. Tabel TER dan tarif dikodekan dari regulasi yang berlaku saat ditulis; verifikasi dengan konsultan pajak sebelum dipakai untuk payroll riil.
+
+Data demo tambahan tersedia melalui `make seed-hr` setelah seed dasar. Nominalnya fiktif. Seed tambahan tidak menimpa komponen gaji yang sudah ada.
 
 ## Migrasi database
 
@@ -130,11 +137,11 @@ make migrate          # sekarang: tidak ada perubahan
 
 Bila database baru sampai 000002, jalankan `cd hris-api && go run ./cmd/migrate force 2`, lalu `make migrate` untuk menerapkan 000003 dan 000004. Untuk Compose, pakai `docker compose run --rm migrate ./migrate force 4` sebelum `docker compose up -d`.
 
-Migrasi 000003/000004 bersifat forward-only. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
+Migrasi 000003/000004/000005 bersifat forward-only. Pengajuan cuti lama mempertahankan hitungan hari kalender; pengajuan baru menyimpan snapshot hari kerja agar perubahan kalender tidak mengubah pengajuan yang sudah ada.
 
 ## Batas implementasi saat ini
 
-Payroll mendukung nominal agregat rupiah utuh dan pembayaran manual. Belum ada kalkulasi otomatis pajak/BPJS, prorata, konversi lembur ke gaji, komponen dinamis, THR, transfer bank, atau koreksi payroll setelah finalisasi. Payroll historis tidak otomatis merekonstruksi karyawan yang sudah keluar.
+Payroll menghitung PPh 21, BPJS, prorata, lembur, dan THR secara otomatis dengan pembayaran manual. Belum ada transfer bank, laporan e-Bupot/SPT, koreksi payroll setelah finalisasi, cuti tidak dibayar otomatis, atau saldo PPh dari sistem lain (karyawan yang pindah di tengah tahun dihitung dari periode yang tercatat di HRIS saja). Karyawan keluar tanpa tanggal keluar (data lama) tidak ikut payroll berikutnya.
 
 Approval masih satu tingkat. Kalender kerja belum menjadi penjadwalan shift atau aturan keterlambatan; absensi/koreksi belum mendukung shift lintas tengah malam dan GPS/biometrik. Kuota cuti belum memiliki accrual/carry-over otomatis. Dokumen berupa tautan, tanpa upload/tanda tangan; izin file tetap diatur pada penyedia file. Target kinerja berupa progres, tanpa appraisal/360 review. Rekrutmen mencatat kandidat dan tahapan, tanpa portal lowongan atau konversi otomatis menjadi karyawan.
 
